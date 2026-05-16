@@ -1,0 +1,87 @@
+main {
+  display: grid;
+  gap: 1rem;
+  height: 100vh;
+  padding: 1rem;
+  box-sizing: border-box;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.benchmark {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.benchmark input {
+  width: 8rem;
+}
+
+.panes {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1rem;
+  min-height: 0;
+}
+
+label {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 0.5rem;
+  min-height: 0;
+}
+
+textarea,
+pre {
+  margin: 0;
+  min-height: 0;
+  padding: 0.75rem;
+  border: 1px solid #333;
+  box-sizing: border-box;
+  overflow: auto;
+  background: #111;
+  color: #eee;
+  font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+textarea {
+  resize: none;
+}
+
+button,
+input {
+  border: 1px solid #333;
+  padding: 0.5rem 0.75rem;
+  background: #111;
+  color: #eee;
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+.benchmark-output {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 800px) {
+  .toolbar,
+  .panes {
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar {
+    display: grid;
+  }
+}
