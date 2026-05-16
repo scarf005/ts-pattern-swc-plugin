@@ -1,0 +1,27 @@
+[package]
+name = "ts-pattern-swc-plugin"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "SWC plugin that compiles ts-pattern match expressions into switch/if-else chains"
+repository = "https://github.com/your-org/ts-pattern-swc-plugin"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+swc_core = { version = "66.0.1", features = [
+  "ecma_ast",
+  "ecma_plugin_transform",
+  "ecma_utils",
+  "ecma_visit"
+] }
+
+[dev-dependencies]
+swc_core = { version = "66.0.1", features = [
+  "common",
+  "ecma_codegen",
+  "ecma_parser",
+  "ecma_parser_typescript",
+  "ecma_visit"
+] }

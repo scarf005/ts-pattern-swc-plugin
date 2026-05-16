@@ -1,0 +1,25 @@
+{
+  "name": "ts-pattern-swc-plugin",
+  "version": "0.1.0",
+  "description": "SWC plugin that compiles ts-pattern match expressions into switch/if-else chains",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+  "files": [
+    "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "cargo build --release --target wasm32-wasip1",
+    "test": "cargo test",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "swc-plugin",
+    "ts-pattern",
+    "pattern-matching"
+  ],
+  "peerDependencies": {
+    "@swc/core": ">=1.5.0"
+  }
+}
