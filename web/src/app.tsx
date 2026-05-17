@@ -5,7 +5,7 @@ import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import { benchmarkInputsEqual, benchmarkModules } from "./benchmark.ts"
-import { formatValue, getModule, type Runnable } from "./runtime.ts"
+import { formatValue, getModule } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
 import * as tsRuntime from "monaco-editor/esm/vs/language/typescript/monaco.contribution"
@@ -375,6 +375,13 @@ const onPatternChange = (event: Event) => {
   selectPattern(pattern, { updatePath: true })
 }
 
+const onSelectWheel = (event: WheelEvent) => {
+  const select = event.currentTarget as HTMLSelectElement
+  event.preventDefault()
+  select.blur()
+  window.scrollBy({ left: event.deltaX, top: event.deltaY })
+}
+
 const TypeScriptEditor = (
   { value, theme, onChange }: TypeScriptEditorProps,
 ) => {
@@ -482,13 +489,21 @@ export const App = () => (
     <section class="toolbar">
       <h1>Playground</h1>
       <div class="controls">
-        <select value={selectedPattern.value} onChange={onPatternChange}>
+        <select
+          value={selectedPattern.value}
+          onChange={onPatternChange}
+          onWheel={onSelectWheel}
+        >
           {commonPatterns.map((pattern) => (
             <option key={pattern.id} value={pattern.id}>{pattern.label}</option>
           ))}
           <option value="custom">Custom</option>
         </select>
-        <select value={theme.value} onChange={onThemeChange}>
+        <select
+          value={theme.value}
+          onChange={onThemeChange}
+          onWheel={onSelectWheel}
+        >
           <option value="white">White</option>
           <option value="dark">Dark</option>
         </select>
