@@ -47,6 +47,12 @@ enum Fallback {
     Exhaustive,
 }
 
+#[derive(Clone)]
+struct SelectionBinding {
+    name: Option<String>,
+    value: Expr,
+}
+
 impl VisitMut for TsPatternTransformer {
     fn visit_mut_module(&mut self, module: &mut Module) {
         self.collect_imports(module);
@@ -302,9 +308,10 @@ impl TsPatternTransformer {
             let mut expression = fallback_expr(chain.fallback, input.clone(), None);
 
             for arm in chain.arms.into_iter().rev() {
+                let handler_input = arm_handler_input(self, input.clone(), &arm)?;
                 expression = cond_expr(
                     arm_test(self, input.clone(), &arm)?,
-                    handler_result(arm.handler, input.clone()),
+                    handler_result(arm.handler, handler_input),
                     expression,
                 );
             }
@@ -322,9 +329,10 @@ impl TsPatternTransformer {
         );
 
         for arm in chain.arms.into_iter().rev() {
+            let handler_input = arm_handler_input(self, ident_expr(&input_ident), &arm)?;
             expression = cond_expr(
                 arm_test(self, ident_expr(&input_ident), &arm)?,
-                handler_result(arm.handler, ident_expr(&input_ident)),
+                handler_result(arm.handler, handler_input),
                 expression,
             );
         }
@@ -346,6 +354,48 @@ impl TsPatternTransformer {
     }
 
     fn pattern_test(&self, value: Expr, pattern: &Expr) -> Option<Expr> {
+        let mut selections = Vec::new();
+        self.pattern_test_with_selections(value, pattern, &mut selections)
+    }
+
+    fn pattern_test_with_selections(
+        &self,
+        value: Expr,
+        pattern: &Expr,
+        selections: &mut Vec<SelectionBinding>,
+    ) -> Option<Expr> {
+        if let Some(call) = self.is_p_call(pattern, "select") {
+            return match call.args.as_slice() {
+                [] => {
+                    selections.push(SelectionBinding { name: None, value });
+                    Some(bool_lit(true))
+                }
+                [arg] => {
+                    if let Some(name) = selection_name(&arg.expr) {
+                        selections.push(SelectionBinding {
+                            name: Some(name),
+                            value,
+                        });
+                        Some(bool_lit(true))
+                    } else {
+                        selections.push(SelectionBinding {
+                            name: None,
+                            value: value.clone(),
+                        });
+                        self.pattern_test_with_selections(value, &arg.expr, selections)
+                    }
+                }
+                [name, inner] => {
+                    selections.push(SelectionBinding {
+                        name: Some(selection_name(&name.expr)?),
+                        value: value.clone(),
+                    });
+                    self.pattern_test_with_selections(value, &inner.expr, selections)
+                }
+                _ => None,
+            };
+        }
+
         if self.is_p_member(pattern, "_") {
             return Some(bool_lit(true));
         }
@@ -382,7 +432,7 @@ impl TsPatternTransformer {
             }
             return Some(or(
                 strict_eq(value.clone(), undefined_expr()),
-                self.pattern_test(value, &call.args[0].expr)?,
+                self.pattern_test_with_selections(value, &call.args[0].expr, selections)?,
             ));
         }
 
@@ -390,10 +440,16 @@ impl TsPatternTransformer {
             if call.args.len() != 1 {
                 return None;
             }
-            return Some(unary(
-                UnaryOp::Bang,
-                self.pattern_test(value, &call.args[0].expr)?,
-            ));
+            let mut inner_selections = Vec::new();
+            let test = self.pattern_test_with_selections(
+                value,
+                &call.args[0].expr,
+                &mut inner_selections,
+            )?;
+            if !inner_selections.is_empty() {
+                return None;
+            }
+            return Some(unary(UnaryOp::Bang, test));
         }
 
         if let Some(call) = self.is_p_call(pattern, "union") {
@@ -404,7 +460,18 @@ impl TsPatternTransformer {
             return call
                 .args
                 .iter()
-                .map(|arg| self.pattern_test(value.clone(), &arg.expr))
+                .map(|arg| {
+                    let mut inner_selections = Vec::new();
+                    let test = self.pattern_test_with_selections(
+                        value.clone(),
+                        &arg.expr,
+                        &mut inner_selections,
+                    )?;
+                    if !inner_selections.is_empty() {
+                        return None;
+                    }
+                    Some(test)
+                })
                 .try_fold(None, |acc, test| {
                     let test = test?;
                     Some(Some(match acc {
@@ -425,7 +492,15 @@ impl TsPatternTransformer {
             }
 
             let item_ident = private_ident!("_tsPatternItem");
-            let item_test = self.pattern_test(ident_expr(&item_ident), &call.args[0].expr)?;
+            let mut item_selections = Vec::new();
+            let item_test = self.pattern_test_with_selections(
+                ident_expr(&item_ident),
+                &call.args[0].expr,
+                &mut item_selections,
+            )?;
+            if !item_selections.is_empty() {
+                return None;
+            }
             return Some(and(
                 array_test,
                 call_member(
@@ -480,13 +555,18 @@ impl TsPatternTransformer {
             {
                 Some(strict_eq(value, pattern.clone()))
             }
-            Expr::Object(object) => self.object_test(value, object),
-            Expr::Array(array) => self.array_test(value, array),
+            Expr::Object(object) => self.object_test(value, object, selections),
+            Expr::Array(array) => self.array_test(value, array, selections),
             _ => None,
         }
     }
 
-    fn object_test(&self, value: Expr, object: &ObjectLit) -> Option<Expr> {
+    fn object_test(
+        &self,
+        value: Expr,
+        object: &ObjectLit,
+        selections: &mut Vec<SelectionBinding>,
+    ) -> Option<Expr> {
         let base = and(
             strict_ne(value.clone(), null_lit()),
             typeof_eq(value.clone(), "object"),
@@ -502,7 +582,8 @@ impl TsPatternTransformer {
             };
 
             let prop_access = prop_access(value.clone(), &key_value.key)?;
-            let test = self.pattern_test(prop_access, &key_value.value)?;
+            let test =
+                self.pattern_test_with_selections(prop_access, &key_value.value, selections)?;
             let test = if self.is_optional_pattern(&key_value.value) {
                 test
             } else {
@@ -516,7 +597,12 @@ impl TsPatternTransformer {
         self.is_p_call(pattern, "optional").is_some()
     }
 
-    fn array_test(&self, value: Expr, array: &ArrayLit) -> Option<Expr> {
+    fn array_test(
+        &self,
+        value: Expr,
+        array: &ArrayLit,
+        selections: &mut Vec<SelectionBinding>,
+    ) -> Option<Expr> {
         let len = array.elems.len();
         let base = and(
             array_is_array(value.clone()),
@@ -548,7 +634,7 @@ impl TsPatternTransformer {
                         raw: None,
                     })),
                 );
-                let test = self.pattern_test(item, &elem.expr)?;
+                let test = self.pattern_test_with_selections(item, &elem.expr, selections)?;
                 Some(and(acc, test))
             })
     }
@@ -658,6 +744,70 @@ fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> 
     match &arm.guard {
         Some(guard) => Some(and(pattern_test, guard_result(guard, input))),
         None => Some(pattern_test),
+    }
+}
+
+fn arm_handler_input(
+    transformer: &TsPatternTransformer,
+    input_expr: Expr,
+    arm: &MatchArm,
+) -> Option<Expr> {
+    let mut selections = Vec::new();
+
+    for pattern in &arm.patterns {
+        transformer.pattern_test_with_selections(input_expr.clone(), pattern, &mut selections)?;
+    }
+
+    if selections.is_empty() {
+        return Some(input_expr);
+    }
+
+    if arm.patterns.len() != 1 {
+        return None;
+    }
+
+    let anonymous_count = selections
+        .iter()
+        .filter(|selection| selection.name.is_none())
+        .count();
+    if anonymous_count > 1 || (anonymous_count == 1 && selections.len() > 1) {
+        return None;
+    }
+
+    if anonymous_count == 1 {
+        return selections
+            .into_iter()
+            .find_map(|selection| selection.name.is_none().then_some(selection.value));
+    }
+
+    Some(named_selection_object(selections))
+}
+
+fn named_selection_object(selections: Vec<SelectionBinding>) -> Expr {
+    Expr::Object(ObjectLit {
+        span: DUMMY_SP,
+        props: selections
+            .into_iter()
+            .map(|selection| {
+                PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                    key: PropName::Ident(IdentName::new(
+                        selection.name.expect("named selection").into(),
+                        DUMMY_SP,
+                    )),
+                    value: Box::new(selection.value),
+                })))
+            })
+            .collect(),
+    })
+}
+
+fn selection_name(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::Lit(Lit::Str(str)) => Some(str.value.to_string_lossy().to_string()),
+        Expr::Tpl(tpl) if tpl.exprs.is_empty() && tpl.quasis.len() == 1 => {
+            Some(tpl.quasis[0].raw.to_string())
+        }
+        _ => None,
     }
 }
 
@@ -1357,10 +1507,36 @@ const result = match(input).with("ok", () => true).otherwise(() => false);"#,
     }
 
     #[test]
-    fn keeps_unsupported_pattern_unchanged() {
+    fn supports_select_handlers() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
-const result = match(input).with(P.select("value"), (value) => value).otherwise(() => 0);"#,
+const result = match(input).with(P.select(), (value) => value).otherwise(() => 0);"#,
+        );
+
+        assert!(!output.contains("match(input).with"), "{output}");
+        assert!(output.contains("? input : 0"), "{output}");
+    }
+
+    #[test]
+    fn supports_nested_select_handlers() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with({ type: "ok", data: { type: "img", src: P.select() } }, (src) => `<img src="${src}" />`).otherwise(() => "?");"#,
+        );
+
+        assert!(!output.contains("match(input).with"), "{output}");
+        assert!(output.contains("input.data.src"), "{output}");
+        assert!(
+            output.contains("<img src=\"${input.data.src}\" />"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn keeps_unsupported_array_select_pattern_unchanged() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with(P.array(P.select()), (value) => value).otherwise(() => []);"#,
         );
 
         assert!(output.contains("match(input).with"), "{output}");
