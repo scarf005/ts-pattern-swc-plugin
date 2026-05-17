@@ -194,6 +194,7 @@ const compiled = signal("")
 const status = signal("Compiling")
 const iterations = signal("100000")
 const benchmarkStatus = signal("")
+const runStatus = signal("")
 const theme = signal(getInitialTheme())
 const selectedPattern = signal<PatternId>("object")
 let compileVersion = 0
@@ -271,6 +272,28 @@ const measure = (
   return { ms: performance.now() - start, checksum }
 }
 
+const runCurrent = async () => {
+  runStatus.value = "Running"
+  try {
+    const code = await transformSource({
+      code: source.value,
+      plugin: true,
+      moduleType: "commonjs",
+    })
+    const module = getModule(code)
+    const inputs = module.inputs?.length
+      ? module.inputs
+      : defaultBenchmarkInputs
+    runStatus.value = inputs
+      .map((input) =>
+        `${JSON.stringify(input)} => ${JSON.stringify(module.run(input))}`
+      )
+      .join("\n")
+  } catch (error) {
+    runStatus.value = error instanceof Error ? error.message : String(error)
+  }
+}
+
 const runBenchmark = async () => {
   benchmarkStatus.value = "Running"
   try {
@@ -320,6 +343,7 @@ const onEditorChange = (value: string) => {
   source.value = value
   selectedPattern.value = "custom"
   benchmarkStatus.value = ""
+  runStatus.value = ""
   void compileSource(value)
 }
 
@@ -347,6 +371,7 @@ const onPatternChange = (event: Event) => {
   selectedPattern.value = pattern.id
   source.value = pattern.source
   benchmarkStatus.value = ""
+  runStatus.value = ""
   void compileSource(pattern.source)
 }
 
@@ -464,6 +489,7 @@ export const App = () => (
           onInput={onIterationsInput}
           inputMode="numeric"
         />
+        <button type="button" onClick={runCurrent}>Run</button>
         <button type="button" onClick={runBenchmark}>Benchmark</button>
       </div>
     </section>
@@ -484,6 +510,7 @@ export const App = () => (
         />
       </label>
     </section>
+    {runStatus.value && <pre class="run-output">{runStatus.value}</pre>}
     {benchmarkStatus.value && (
       <pre class="benchmark-output">{benchmarkStatus.value}</pre>
     )}
