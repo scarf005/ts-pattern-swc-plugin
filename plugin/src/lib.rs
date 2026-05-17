@@ -75,11 +75,11 @@ impl VisitMut for TsPatternTransformer {
     fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
         if let BlockStmtOrExpr::Expr(expr) = &*arrow.body {
             if let Some(chain) = self.parse_match_chain(expr) {
-                if chain.arms.iter().all(is_switchable_arm) {
+                if let Some(stmts) = self.compile_arrow_match_stmts(chain) {
                     arrow.body = Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
                         span: DUMMY_SP,
                         ctxt: Default::default(),
-                        stmts: self.compile_switch_stmts(chain),
+                        stmts,
                     }));
                     return;
                 }
@@ -248,7 +248,23 @@ impl TsPatternTransformer {
         }
     }
 
+    fn compile_arrow_match_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
+        if is_object_switch_chain(&chain) {
+            return self.compile_object_switch_stmts(chain);
+        }
+
+        if chain.arms.iter().all(is_switchable_arm) {
+            return Some(self.compile_switch_stmts(chain));
+        }
+
+        self.compile_if_stmts(chain)
+    }
+
     fn compile_chain(&mut self, chain: MatchChain) -> Option<Expr> {
+        if is_object_switch_chain(&chain) {
+            return self.compile_object_switch(chain);
+        }
+
         if chain.arms.iter().all(is_switchable_arm) {
             Some(self.compile_switch(chain))
         } else {
@@ -258,6 +274,10 @@ impl TsPatternTransformer {
 
     fn compile_switch(&mut self, chain: MatchChain) -> Expr {
         iife(self.compile_switch_stmts(chain))
+    }
+
+    fn compile_object_switch(&mut self, chain: MatchChain) -> Option<Expr> {
+        Some(iife(self.compile_object_switch_stmts(chain)?))
     }
 
     fn compile_switch_stmts(&mut self, chain: MatchChain) -> Vec<Stmt> {
@@ -302,6 +322,105 @@ impl TsPatternTransformer {
         ]
     }
 
+    fn compile_object_switch_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
+        let key = common_object_switch_key(&chain)?;
+        let input_ident = private_ident!("_tsPatternInput");
+        let input_expr = ident_expr(&input_ident);
+        let switch_expr = prop_access(input_expr.clone(), &key)?;
+        let mut cases = Vec::new();
+
+        for arm in chain.arms {
+            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
+            let handler_call = handler_result(arm.handler, handler_input);
+            let mut arm_patterns = arm.patterns.into_iter().peekable();
+
+            while let Some(pattern) = arm_patterns.next() {
+                let (_, value) = object_switch_pattern(&pattern)?;
+                let consequent = if arm_patterns.peek().is_some() {
+                    Vec::new()
+                } else {
+                    vec![return_stmt(handler_call.clone())]
+                };
+
+                cases.push(SwitchCase {
+                    span: DUMMY_SP,
+                    test: Some(Box::new(value.clone())),
+                    cons: consequent,
+                });
+            }
+        }
+
+        let exhaustive_error_callee =
+            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
+        let fallback = fallback_stmts(
+            chain.fallback.clone(),
+            input_expr.clone(),
+            exhaustive_error_callee.clone(),
+        );
+        cases.push(SwitchCase {
+            span: DUMMY_SP,
+            test: None,
+            cons: fallback,
+        });
+
+        Some(vec![
+            const_stmt(input_ident.clone(), *chain.input),
+            Stmt::If(IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(unary(
+                    UnaryOp::Bang,
+                    object_switch_base_test(input_expr.clone(), &key)?,
+                )),
+                cons: Box::new(Stmt::Block(BlockStmt {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    stmts: fallback_stmts(
+                        chain.fallback,
+                        input_expr.clone(),
+                        exhaustive_error_callee,
+                    ),
+                })),
+                alt: None,
+            }),
+            Stmt::Switch(SwitchStmt {
+                span: DUMMY_SP,
+                discriminant: Box::new(switch_expr),
+                cases,
+            }),
+        ])
+    }
+
+    fn compile_if_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
+        let (input_expr, mut stmts) = if can_inline_input(&chain.input) {
+            (*chain.input, Vec::new())
+        } else {
+            let input_ident = private_ident!("_tsPatternInput");
+            (
+                ident_expr(&input_ident),
+                vec![const_stmt(input_ident, *chain.input)],
+            )
+        };
+
+        for arm in chain.arms {
+            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
+            stmts.push(Stmt::If(IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
+                cons: Box::new(return_stmt(handler_result(arm.handler, handler_input))),
+                alt: None,
+            }));
+        }
+
+        let exhaustive_error_callee =
+            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
+        stmts.extend(fallback_stmts(
+            chain.fallback,
+            input_expr,
+            exhaustive_error_callee,
+        ));
+        Some(stmts)
+    }
+
     fn compile_if_chain(&mut self, chain: MatchChain) -> Option<Expr> {
         if can_inline_input(&chain.input) && matches!(chain.fallback, Fallback::Otherwise(_)) {
             let input = *chain.input;
@@ -319,28 +438,7 @@ impl TsPatternTransformer {
             return Some(expression);
         }
 
-        let input_ident = private_ident!("_tsPatternInput");
-        let exhaustive_error_callee =
-            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
-        let mut expression = fallback_expr(
-            chain.fallback,
-            ident_expr(&input_ident),
-            exhaustive_error_callee,
-        );
-
-        for arm in chain.arms.into_iter().rev() {
-            let handler_input = arm_handler_input(self, ident_expr(&input_ident), &arm)?;
-            expression = cond_expr(
-                arm_test(self, ident_expr(&input_ident), &arm)?,
-                handler_result(arm.handler, handler_input),
-                expression,
-            );
-        }
-
-        Some(iife(vec![
-            const_stmt(input_ident, *chain.input),
-            return_stmt(expression),
-        ]))
+        Some(iife(self.compile_if_stmts(chain)?))
     }
 
     fn exhaustive_error_callee(&mut self) -> Expr {
@@ -838,6 +936,67 @@ fn can_inline_input(expr: &Expr) -> bool {
     matches!(expr, Expr::Ident(_) | Expr::Lit(_))
 }
 
+fn is_object_switch_chain(chain: &MatchChain) -> bool {
+    common_object_switch_key(chain).is_some()
+}
+
+fn common_object_switch_key(chain: &MatchChain) -> Option<PropName> {
+    if chain.arms.iter().any(|arm| arm.guard.is_some()) {
+        return None;
+    }
+
+    let mut keys = chain
+        .arms
+        .iter()
+        .flat_map(|arm| arm.patterns.iter())
+        .map(|pattern| object_switch_pattern(pattern).map(|(key, _)| key.clone()));
+
+    let first = keys.next()??;
+    keys.try_fold(first.clone(), |current, key| {
+        let key = key?;
+        prop_name_eq(&current, &key).then_some(current)
+    })
+}
+
+fn object_switch_pattern(pattern: &Expr) -> Option<(&PropName, &Expr)> {
+    let Expr::Object(object) = pattern else {
+        return None;
+    };
+
+    if object.props.len() != 1 {
+        return None;
+    }
+
+    let PropOrSpread::Prop(prop) = &object.props[0] else {
+        return None;
+    };
+    let Prop::KeyValue(key_value) = &**prop else {
+        return None;
+    };
+    is_switch_literal(&key_value.value).then_some((&key_value.key, &key_value.value))
+}
+
+fn object_switch_base_test(input: Expr, key: &PropName) -> Option<Expr> {
+    Some(and(
+        and(
+            strict_ne(input.clone(), null_lit()),
+            typeof_eq(input.clone(), "object"),
+        ),
+        prop_in_object(key, input)?,
+    ))
+}
+
+fn prop_name_eq(left: &PropName, right: &PropName) -> bool {
+    match (left, right) {
+        (PropName::Ident(left), PropName::Ident(right)) => left.sym == right.sym,
+        (PropName::Str(left), PropName::Str(right)) => left.value == right.value,
+        (PropName::Num(left), PropName::Num(right)) => left.value == right.value,
+        (PropName::BigInt(left), PropName::BigInt(right)) => left.value == right.value,
+        (PropName::Computed(_), PropName::Computed(_)) => false,
+        _ => false,
+    }
+}
+
 fn is_switchable_arm(arm: &MatchArm) -> bool {
     arm.guard.is_none()
         && arm
@@ -1268,11 +1427,23 @@ fn strict_ne(left: Expr, right: Expr) -> Expr {
 }
 
 fn and(left: Expr, right: Expr) -> Expr {
-    bin(BinaryOp::LogicalAnd, left, right)
+    match (as_bool_lit(&left), as_bool_lit(&right)) {
+        (Some(true), _) => right,
+        (_, Some(true)) => left,
+        (Some(false), _) => bool_lit(false),
+        (_, Some(false)) => bool_lit(false),
+        _ => bin(BinaryOp::LogicalAnd, left, right),
+    }
 }
 
 fn or(left: Expr, right: Expr) -> Expr {
-    bin(BinaryOp::LogicalOr, left, right)
+    match (as_bool_lit(&left), as_bool_lit(&right)) {
+        (Some(true), _) => bool_lit(true),
+        (_, Some(true)) => bool_lit(true),
+        (Some(false), _) => right,
+        (_, Some(false)) => left,
+        _ => bin(BinaryOp::LogicalOr, left, right),
+    }
 }
 
 fn cond_expr(test: Expr, consequent: Expr, alternate: Expr) -> Expr {
@@ -1306,6 +1477,13 @@ fn bool_lit(value: bool) -> Expr {
         span: DUMMY_SP,
         value,
     }))
+}
+
+fn as_bool_lit(expr: &Expr) -> Option<bool> {
+    match expr {
+        Expr::Lit(Lit::Bool(Bool { value, .. })) => Some(*value),
+        _ => None,
+    }
 }
 
 fn null_lit() -> Expr {
@@ -1406,6 +1584,35 @@ export const run = (command: "start" | "stop" | "pause" | "unknown") => match(co
     }
 
     #[test]
+    fn emits_switch_block_for_arrow_body_object_discriminant_match() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+export const run = (content: { type: "text" } | { type: "img" } | { type: "video" }) => match(content).with({ type: "text" }, () => "<p>...</p>").with({ type: "img" }, () => "<img ... />").with({ type: "video" }, () => "<video ... />").exhaustive();"#,
+        );
+
+        assert!(output.contains("=>{"), "{output}");
+        assert!(output.contains("switch(_tsPatternInput.type)"), "{output}");
+        assert!(output.contains("case \"text\""), "{output}");
+        assert!(!output.contains("=>()=>"), "{output}");
+    }
+
+    #[test]
+    fn emits_if_block_for_arrow_body_exhaustive_match() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+export const run = (result: { type: "error" } | { type: "ok"; data: { type: "img"; src: string } } | { type: "ok"; data: { type: "text"; content: string } }) => match(result).with({ type: "error" }, () => "error").with({ type: "ok", data: { type: "text" } }, ({ data }) => data.content).with({ type: "ok", data: { type: "img", src: P.select() } }, (src) => src).exhaustive();"#,
+        );
+
+        assert!(output.contains("=>{"), "{output}");
+        assert!(output.contains("if ("), "{output}");
+        assert!(
+            output.contains("throw new NonExhaustiveError(result)"),
+            "{output}"
+        );
+        assert!(!output.contains("=>()=>"), "{output}");
+    }
+
+    #[test]
     fn emits_ternary_for_object_pattern() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
@@ -1460,11 +1667,8 @@ const result = match(input).with({ type: "ok", value: P.number }, ({ value }) =>
 const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId: P._ }, () => "team").exhaustive();"#,
         );
 
-        assert!(
-            output.contains("\"storeId\" in _tsPatternInput"),
-            "{output}"
-        );
-        assert!(output.contains("\"teamId\" in _tsPatternInput"), "{output}");
+        assert!(output.contains("\"storeId\" in input"), "{output}");
+        assert!(output.contains("\"teamId\" in input"), "{output}");
     }
 
     #[test]
@@ -1474,11 +1678,8 @@ const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId:
 const result = match(input).with({ type: undefined }, () => true).exhaustive();"#,
         );
 
-        assert!(output.contains("\"type\" in _tsPatternInput"), "{output}");
-        assert!(
-            output.contains("_tsPatternInput.type === undefined"),
-            "{output}"
-        );
+        assert!(output.contains("\"type\" in input"), "{output}");
+        assert!(output.contains("input.type === undefined"), "{output}");
     }
 
     #[test]
