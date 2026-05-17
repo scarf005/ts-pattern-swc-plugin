@@ -12,6 +12,7 @@ dist
 dist-ssr
 .vite
 .playwright-cli
+public/ts_pattern_swc_plugin.wasm
 *.local
 
 # Editor directories and files
