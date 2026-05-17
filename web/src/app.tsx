@@ -348,7 +348,7 @@ const runBenchmark = async () => {
       `compiled (median of ${result.sampleCount}): ${
         result.optimized.ms.toFixed(2)
       } ms`,
-      `speedup: ${result.speedup.toFixed(2)}x`,
+      `ts-pattern SWC plugin: ${result.speedup.toFixed(2)}x faster than ts-pattern`,
     ].join("\n")
   } catch (error) {
     benchmarkStatus.value = error instanceof Error

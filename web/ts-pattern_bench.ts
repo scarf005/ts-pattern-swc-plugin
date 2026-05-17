@@ -1,119 +1,112 @@
 /// <reference lib="deno.ns" />
 
-import * as tsPattern from "ts-pattern"
-import { transformWithSwcWasm } from "./src/swc-wasm-transform.ts"
+import { formatValue, getModule, type ModuleExports } from "./src/runtime.ts"
+import { pluginPath, transformWithSwcWasm } from "./src/swc-wasm-transform.ts"
 
-type BenchModule = {
-  inputs: unknown[]
-  run: (input: unknown) => number
+type BenchExample = {
+  id: string
+  baseline: Required<ModuleExports>
+  optimized: Required<ModuleExports>
 }
 
-const source = String.raw`
-import { match } from "ts-pattern"
+const examplesRoot = new URL("../examples/", import.meta.url)
 
-type Event =
-  | { type: "click"; button: "left" | "right"; x: number; y: number }
-  | { type: "keypress"; key: "Enter" | "Escape" | "Space"; repeat: boolean }
-  | { type: "resize"; width: number; height: number }
-  | { type: "idle" }
-
-export const inputs: Event[] = Array.from({ length: 128 }, (_, index) => {
-  switch (index % 8) {
-    case 0:
-      return { type: "click", button: "left", x: index, y: index * 2 }
-    case 1:
-      return { type: "click", button: "right", x: index, y: index * 3 }
-    case 2:
-      return { type: "keypress", key: "Enter", repeat: false }
-    case 3:
-      return { type: "keypress", key: "Escape", repeat: true }
-    case 4:
-      return { type: "keypress", key: "Space", repeat: false }
-    case 5:
-      return { type: "resize", width: 800 + index, height: 600 + index }
-    default:
-      return { type: "idle" }
+const getExampleNames = async () => {
+  const names: string[] = []
+  for await (const entry of Deno.readDir(examplesRoot)) {
+    if (entry.isFile && entry.name.endsWith(".ts")) names.push(entry.name)
   }
-})
+  names.sort()
+  if (names.length === 0) throw new Error("No examples found")
+  return names
+}
 
-export const run = (event: Event) =>
-  match(event)
-    .with({ type: "click", button: "left" }, ({ x, y }) => x + y)
-    .with({ type: "click", button: "right" }, ({ x, y }) => x - y)
-    .with({ type: "keypress", key: "Enter" }, () => 10)
-    .with({ type: "keypress", key: "Escape" }, ({ repeat }) => repeat ? 20 : 21)
-    .with({ type: "keypress", key: "Space" }, () => 30)
-    .with({ type: "resize" }, ({ width, height }) => width * height)
-    .with({ type: "idle" }, () => 0)
-    .exhaustive()
-`
-
-const tsPatternModule = tsPattern as Record<string, unknown>
-
-const loadModule = (code: string): BenchModule => {
-  const exports: Record<string, unknown> = {}
-  const module = { exports }
-  const requireShim = (name: string) => {
-    if (name === "ts-pattern") return tsPatternModule
-    throw new Error(`Unsupported import: ${name}`)
-  }
-
-  new Function("require", "exports", "module", code)(
-    requireShim,
-    exports,
-    module,
+const transformExample = async (source: string, options: { plugin: boolean }) =>
+  getModule(
+    (await transformWithSwcWasm({
+      code: source,
+      moduleType: "commonjs",
+      plugin: options.plugin,
+    })).code,
   )
 
-  const loaded = module.exports as Partial<BenchModule>
-  if (!Array.isArray(loaded.inputs) || typeof loaded.run !== "function") {
-    throw new Error("Bench module must export inputs and run")
+const loadExample = async (name: string): Promise<BenchExample> => {
+  const source = await Deno.readTextFile(new URL(name, examplesRoot))
+  const [baseline, optimized] = await Promise.all([
+    transformExample(source, { plugin: false }),
+    transformExample(source, { plugin: true }),
+  ])
+
+  if (!baseline.inputs?.length) throw new Error(`${name}: missing inputs`)
+  if (!optimized.inputs?.length) {
+    throw new Error(`${name}: missing optimized inputs`)
   }
-  return loaded as BenchModule
+  if (baseline.inputs.length !== optimized.inputs.length) {
+    throw new Error(`${name}: input length differs`)
+  }
+
+  for (const [index, baselineInput] of baseline.inputs.entries()) {
+    const optimizedInput = optimized.inputs[index]
+    if (formatValue(baselineInput) !== formatValue(optimizedInput)) {
+      throw new Error(`${name}: input ${index} differs`)
+    }
+    if (
+      formatValue(baseline.run(baselineInput)) !==
+        formatValue(optimized.run(optimizedInput))
+    ) {
+      throw new Error(`${name}: output ${index} differs`)
+    }
+  }
+
+  return {
+    id: name.replace(/\.ts$/, ""),
+    baseline: { run: baseline.run, inputs: baseline.inputs },
+    optimized: { run: optimized.run, inputs: optimized.inputs },
+  }
 }
 
-const baselineCode = (await transformWithSwcWasm({
-  code: source,
-  moduleType: "commonjs",
-  plugin: false,
-})).code
-const optimizedCode = (await transformWithSwcWasm({
-  code: source,
-  moduleType: "commonjs",
-  plugin: true,
-})).code
-
-if (optimizedCode.includes(".with(")) {
-  throw new Error("Optimized code still contains ts-pattern .with() calls")
+const hashString = (value: string) => {
+  let hash = 0
+  for (let index = 0; index < value.length; index += 1) {
+    hash = Math.imul(hash ^ value.charCodeAt(index), 16777619)
+  }
+  return hash >>> 0
 }
 
-const baseline = loadModule(baselineCode)
-const optimized = loadModule(optimizedCode)
+const score = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value)
+    ? value | 0
+    : hashString(formatValue(value))
 
-if (baseline.inputs.length !== optimized.inputs.length) {
-  throw new Error("Input length differs between baseline and optimized modules")
+const runAll = (module: Required<ModuleExports>) => {
+  let checksum = 0
+  for (const input of module.inputs) {
+    checksum = (checksum + score(module.run(input))) | 0
+  }
+  return checksum
 }
 
-const runAll = (module: BenchModule) => {
-  let total = 0
-  for (const input of module.inputs) total += module.run(input)
-  return total
-}
-
-const expected = runAll(baseline)
-const actual = runAll(optimized)
-if (actual !== expected) {
-  throw new Error(`Output checksum differs: ${actual} !== ${expected}`)
-}
+await Deno.stat(pluginPath)
+const examples = await Promise.all((await getExampleNames()).map(loadExample))
 
 let sink = 0
 
-Deno.bench("ts-pattern runtime", () => {
-  sink ^= runAll(baseline)
-})
+for (const example of examples) {
+  Deno.bench({
+    name: "ts-pattern runtime",
+    group: example.id,
+  }, () => {
+    sink ^= runAll(example.baseline)
+  })
 
-Deno.bench("ts-pattern swc plugin runtime", () => {
-  sink ^= runAll(optimized)
-})
+  Deno.bench({
+    name: "ts-pattern swc plugin runtime",
+    group: example.id,
+    baseline: true,
+  }, () => {
+    sink ^= runAll(example.optimized)
+  })
+}
 
 addEventListener("unload", () => {
   if (sink === Number.NaN) console.error(sink)
