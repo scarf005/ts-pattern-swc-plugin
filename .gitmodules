@@ -1,0 +1,3 @@
+[submodule "vendor/ts-pattern"]
+	path = vendor/ts-pattern
+	url = https://github.com/gvergnaud/ts-pattern.git
