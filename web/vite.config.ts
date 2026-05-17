@@ -2,7 +2,7 @@ import { defineConfig, type Plugin } from "vite"
 import deno from "@deno/vite-plugin"
 import preact from "@preact/preset-vite"
 import { transform } from "@swc/core"
-import { existsSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { Buffer } from "node:buffer"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
@@ -21,6 +21,7 @@ const pluginPath = resolve(
   pluginRoot,
   "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
 )
+const indexPath = resolve(root, "index.html")
 
 const ensurePluginBuilt = () => {
   if (existsSync(pluginPath)) return
@@ -57,6 +58,22 @@ const transformApi = (): Plugin => ({
   name: "ts-pattern-swc-transform-api",
   configureServer(server) {
     ensurePluginBuilt()
+    server.middlewares.use(async (request, response, next) => {
+      if (
+        (request.method !== "GET" && request.method !== "HEAD") ||
+        !request.url?.startsWith("/examples/")
+      ) {
+        next()
+        return
+      }
+
+      const html = await server.transformIndexHtml(
+        request.url,
+        readFileSync(indexPath, "utf8"),
+      )
+      response.setHeader("content-type", "text/html")
+      response.end(request.method === "HEAD" ? undefined : html)
+    })
     server.middlewares.use("/api/transform", async (request, response) => {
       if (request.method !== "POST") {
         response.statusCode = 405

@@ -10,7 +10,6 @@ import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
 import * as tsRuntime from "monaco-editor/esm/vs/language/typescript/monaco.contribution"
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker"
 import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker"
-import { readmeExamples } from "./generated/readme-examples.ts"
 
 type MonacoTypeScript =
   typeof import("monaco-editor/esm/vs/editor/editor.main").typescript
@@ -27,101 +26,40 @@ monacoGlobals.MonacoEnvironment = {
       : new EditorWorker(),
 }
 
-const objectPatternSource = `import { match, P } from "ts-pattern"
+const exampleSources = import.meta.glob<string>("../../examples/*.ts", {
+  eager: true,
+  query: "?raw",
+  import: "default",
+})
 
-type Event =
-  | { type: "ok"; value: number }
-  | { type: "error"; message: string }
-  | { type: "idle" }
+const titleCase = (value: string) =>
+  value
+    .split("-")
+    .map((word) => `${word[0]?.toUpperCase() ?? ""}${word.slice(1)}`)
+    .join(" ")
 
-export const inputs = [
-  { type: "ok", value: 1 },
-  { type: "ok", value: 2 },
-  { type: "error", message: "failed" },
-  { type: "idle" },
-] satisfies Event[]
+const exampleIdFromPath = (path: string) =>
+  path.split("/").at(-1)?.replace(/\.ts$/, "") ?? "example"
 
-export const run = (event: Event): string =>
-  match(event)
-    .with({ type: "ok", value: P.number }, ({ value }) => \`ok:\${value}\`)
-    .with({ type: "error" }, ({ message }) => \`error:\${message}\`)
-    .otherwise(() => "idle")
-`
+const commonPatterns = Object.entries(exampleSources)
+  .map(([path, source]) => {
+    const id = exampleIdFromPath(path)
+    return { id, label: titleCase(id), source }
+  })
+  .sort((left, right) => left.label.localeCompare(right.label))
 
-const manualPatterns = [
-  {
-    id: "object",
-    label: "Object ternary",
-    source: objectPatternSource,
-  },
-  {
-    id: "switch",
-    label: "Switch cases",
-    source: `import { match } from "ts-pattern"
+const routeForPattern = (id: string) => `/examples/${id}`
 
-type Command = "start" | "stop" | "pause" | "unknown"
+const patternFromPath = () => {
+  const match = location.pathname.match(/^\/examples\/([^/]+)\/?$/)
+  const id = match?.[1]
+  return commonPatterns.find((pattern) => pattern.id === id) ??
+    commonPatterns[0]
+}
 
-export const inputs = ["start", "stop", "pause", "unknown"] satisfies Command[]
+const DEFAULT_PATTERN = patternFromPath()
+const DEFAULT_SOURCE = DEFAULT_PATTERN?.source ?? ""
 
-export const run = (command: Command): string =>
-  match(command)
-    .with("start", () => "running")
-    .with("stop", "pause", () => "halted")
-    .otherwise(() => "ignored")
-`,
-  },
-  {
-    id: "array",
-    label: "Array pattern",
-    source: `import { match, P } from "ts-pattern"
-
-type Point = [number, number] | []
-
-export const inputs = [[1, 2], [3, 4], []] satisfies Point[]
-
-export const run = (point: Point): string =>
-  match(point)
-    .with([P.number, P.number], ([x, y]) => \`\${x},\${y}\`)
-    .otherwise(() => "empty")
-`,
-  },
-  {
-    id: "union",
-    label: "Union pattern",
-    source: `import { match, P } from "ts-pattern"
-
-type Value = string | number | boolean | null
-
-export const inputs = ["a", 1, true, null] satisfies Value[]
-
-export const run = (value: Value): string =>
-  match(value)
-    .with(P.union(P.string, P.number), () => "scalar")
-    .with(P.boolean, () => "flag")
-    .otherwise(() => "empty")
-`,
-  },
-  {
-    id: "guard",
-    label: "Guard pattern",
-    source: `import { match, P } from "ts-pattern"
-
-type Item = { count: number }
-
-export const inputs = [{ count: 0 }, { count: 2 }, { count: 10 }] satisfies Item[]
-
-export const run = (item: Item): string =>
-  match(item)
-    .with({ count: P.number }, ({ count }) => count > 5, () => "many")
-    .with({ count: P.number }, () => "some")
-    .otherwise(() => "none")
-`,
-  },
-] as const
-
-const commonPatterns = [...manualPatterns, ...readmeExamples] as const
-
-const DEFAULT_SOURCE = objectPatternSource
 const themeStorageKey = "ts-pattern-swc-playground-theme"
 const tsPatternTypes = import.meta.glob<string>(
   "/node_modules/ts-pattern/dist/**/*.d.ts",
@@ -199,7 +137,7 @@ const iterations = signal("100000")
 const benchmarkStatus = signal("")
 const runStatus = signal("")
 const theme = signal(getInitialTheme())
-const selectedPattern = signal<PatternId>("object")
+const selectedPattern = signal<PatternId>(DEFAULT_PATTERN?.id ?? "custom")
 let compileVersion = 0
 
 applyTheme(theme.value)
@@ -282,6 +220,32 @@ const compileSource = async (code: string) => {
     status.value = error instanceof Error ? error.message : String(error)
   }
 }
+
+const resetOutputs = () => {
+  benchmarkStatus.value = ""
+  runStatus.value = ""
+}
+
+const pushPath = (path: string) => {
+  if (location.pathname === path) return
+  history.pushState(null, "", path)
+}
+
+const selectPattern = (
+  pattern: typeof commonPatterns[number],
+  options: { updatePath: boolean },
+) => {
+  selectedPattern.value = pattern.id
+  source.value = pattern.source
+  resetOutputs()
+  if (options.updatePath) pushPath(routeForPattern(pattern.id))
+  void compileSource(pattern.source)
+}
+
+addEventListener("popstate", () => {
+  const pattern = patternFromPath()
+  if (pattern) selectPattern(pattern, { updatePath: false })
+})
 
 const getModule = (code: string): ModuleExports => {
   const exports: Partial<ModuleExports> = {}
@@ -392,8 +356,8 @@ const runBenchmark = async () => {
 const onEditorChange = (value: string) => {
   source.value = value
   selectedPattern.value = "custom"
-  benchmarkStatus.value = ""
-  runStatus.value = ""
+  resetOutputs()
+  pushPath("/")
   void compileSource(value)
 }
 
@@ -418,11 +382,7 @@ const onPatternChange = (event: Event) => {
   const value = (event.currentTarget as HTMLSelectElement).value as PatternId
   const pattern = commonPatterns.find((item) => item.id === value)
   if (!pattern) return
-  selectedPattern.value = pattern.id
-  source.value = pattern.source
-  benchmarkStatus.value = ""
-  runStatus.value = ""
-  void compileSource(pattern.source)
+  selectPattern(pattern, { updatePath: true })
 }
 
 const TypeScriptEditor = (
@@ -431,6 +391,7 @@ const TypeScriptEditor = (
   const hostRef = useRef<HTMLDivElement>(null)
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
   const onChangeRef = useRef(onChange)
+  const isUpdatingRef = useRef(false)
 
   onChangeRef.current = onChange
 
@@ -454,6 +415,7 @@ const TypeScriptEditor = (
     })
     editorRef.current = editor
     const subscription = editor.onDidChangeModelContent(() => {
+      if (isUpdatingRef.current) return
       onChangeRef.current(editor.getValue())
     })
     return () => {
@@ -467,7 +429,9 @@ const TypeScriptEditor = (
   useEffect(() => {
     const editor = editorRef.current
     if (!editor || editor.getValue() === value) return
+    isUpdatingRef.current = true
     editor.setValue(value)
+    isUpdatingRef.current = false
   }, [value])
 
   useEffect(() => {

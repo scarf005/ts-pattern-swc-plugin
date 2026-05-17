@@ -7,8 +7,7 @@
     "dev": "deno run -A --node-modules-dir npm:vite",
     "build": "deno run -A --node-modules-dir npm:vite build",
     "preview": "deno run -A --node-modules-dir npm:vite preview",
-    "serve": "deno task preview",
-    "generate:examples": "deno run -A scripts/generate-readme-examples.ts && deno fmt src/generated/readme-examples.ts"
+    "serve": "deno task preview"
   },
   "nodeModulesDir": "auto",
   "compilerOptions": {
