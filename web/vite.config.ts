@@ -1,34 +1,17 @@
 import { defineConfig, type Plugin } from "vite"
 import deno from "@deno/vite-plugin"
 import preact from "@preact/preset-vite"
-import { existsSync, readFileSync } from "node:fs"
-import { Buffer } from "node:buffer"
+import { copyFileSync, existsSync, mkdirSync, readFileSync } from "node:fs"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
-import {
-  hasSwcWasmBinding,
-  type ModuleType,
-  pluginPath,
-  pluginRoot,
-  transformWithSwcWasm,
-} from "./src/swc-wasm-transform.ts"
-
-type TransformRequest = {
-  code?: unknown
-  plugin?: unknown
-  moduleType?: unknown
-}
+import { pluginPath, pluginRoot } from "./src/swc-wasm-transform.ts"
 
 const root = dirname(fileURLToPath(import.meta.url))
 const indexPath = resolve(root, "index.html")
+const pluginAssetName = "ts_pattern_swc_plugin.wasm"
 
 const ensurePluginBuilt = () => {
-  if (!hasSwcWasmBinding()) {
-    throw new Error(
-      "Run `cd plugin && npm install` before starting the playground",
-    )
-  }
   if (existsSync(pluginPath)) return
   const result = spawnSync("cargo", [
     "build",
@@ -44,25 +27,27 @@ const ensurePluginBuilt = () => {
   }
 }
 
-const readJson = async (request: import("node:http").IncomingMessage) =>
-  await new Promise<TransformRequest>((resolveRequest, reject) => {
-    const chunks: Uint8Array[] = []
-    request.on("data", (chunk) => chunks.push(chunk))
-    request.on("end", () => {
-      try {
-        const body = Buffer.concat(chunks).toString("utf8")
-        resolveRequest(body ? JSON.parse(body) : {})
-      } catch (error) {
-        reject(error)
-      }
-    })
-    request.on("error", reject)
-  })
-
-const transformApi = (): Plugin => ({
-  name: "ts-pattern-swc-transform-api",
+const playgroundAssets = (): Plugin => ({
+  name: "ts-pattern-swc-playground-assets",
+  buildStart() {
+    ensurePluginBuilt()
+  },
+  writeBundle(options) {
+    ensurePluginBuilt()
+    const outputDir = resolve(root, String(options.dir ?? "dist"))
+    mkdirSync(outputDir, { recursive: true })
+    copyFileSync(pluginPath, resolve(outputDir, pluginAssetName))
+  },
   configureServer(server) {
     ensurePluginBuilt()
+    server.middlewares.use(`/${pluginAssetName}`, (request, response) => {
+      response.setHeader("content-type", "application/wasm")
+      if (request.method === "HEAD") {
+        response.end()
+        return
+      }
+      response.end(readFileSync(pluginPath))
+    })
     server.middlewares.use(async (request, response, next) => {
       if (
         (request.method !== "GET" && request.method !== "HEAD") ||
@@ -79,43 +64,9 @@ const transformApi = (): Plugin => ({
       response.setHeader("content-type", "text/html")
       response.end(request.method === "HEAD" ? undefined : html)
     })
-    server.middlewares.use("/api/transform", async (request, response) => {
-      if (request.method !== "POST") {
-        response.statusCode = 405
-        response.end(JSON.stringify({ error: "Method not allowed" }))
-        return
-      }
-
-      try {
-        const body = await readJson(request)
-        if (typeof body.code !== "string") {
-          response.statusCode = 400
-          response.end(JSON.stringify({ error: "code must be a string" }))
-          return
-        }
-
-        const moduleType: ModuleType = body.moduleType === "commonjs"
-          ? "commonjs"
-          : "es6"
-        const result = await transformWithSwcWasm({
-          code: body.code,
-          moduleType,
-          plugin: body.plugin !== false,
-        })
-
-        response.setHeader("content-type", "application/json")
-        response.end(JSON.stringify({ code: result.code }))
-      } catch (error) {
-        response.statusCode = 500
-        response.setHeader("content-type", "application/json")
-        response.end(JSON.stringify({
-          error: error instanceof Error ? error.message : String(error),
-        }))
-      }
-    })
   },
 })
 
 export default defineConfig({
-  plugins: [deno(), preact(), transformApi()],
+  plugins: [deno(), preact(), playgroundAssets()],
 })

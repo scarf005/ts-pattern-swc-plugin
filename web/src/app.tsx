@@ -5,6 +5,7 @@ import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import { benchmarkInputsEqual, benchmarkModules } from "./benchmark.ts"
+import { type ModuleType, transformInBrowser } from "./browser-transform.ts"
 import { cycleValue, getWheelStep } from "./example-wheel.ts"
 import { formatValue, getModule } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
@@ -70,7 +71,6 @@ const tsPatternTypes = import.meta.glob<string>(
   { eager: true, query: "?raw", import: "default" },
 )
 
-type ModuleType = "es6" | "commonjs"
 type TransformOptions = {
   code: string
   plugin: boolean
@@ -190,18 +190,8 @@ const formatCompiledJs = (code: string) =>
     [" : ", "\n  : "],
   ]).replace(/\n{3,}/g, "\n\n")
 
-const transformSource = async (options: TransformOptions) => {
-  const response = await fetch("/api/transform", {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(options),
-  })
-  const result = await response.json() as { code?: string; error?: string }
-  if (!response.ok || !result.code) {
-    throw new Error(result.error ?? "Transform failed")
-  }
-  return formatCompiledJs(result.code)
-}
+const transformSource = async (options: TransformOptions) =>
+  formatCompiledJs((await transformInBrowser(options)).code)
 
 const compileSource = async (code: string) => {
   const version = ++compileVersion
