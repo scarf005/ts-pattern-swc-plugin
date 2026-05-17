@@ -74,7 +74,7 @@ impl TsPatternTransformer {
                 continue;
             };
 
-            if &*import.src.value != "ts-pattern" {
+            if !is_ts_pattern_import(&import.src.value.to_string_lossy()) {
                 continue;
             }
 
@@ -540,6 +540,10 @@ fn module_export_name(name: &ModuleExportName) -> String {
     }
 }
 
+fn is_ts_pattern_import(source: &str) -> bool {
+    source == "ts-pattern" || source.starts_with("npm:ts-pattern")
+}
+
 fn add_non_exhaustive_error_import(module: &mut Module) {
     let specifier = || {
         ImportSpecifier::Named(ImportNamedSpecifier {
@@ -555,7 +559,7 @@ fn add_non_exhaustive_error_import(module: &mut Module) {
             continue;
         };
 
-        if !import.type_only && &*import.src.value == "ts-pattern" {
+        if !import.type_only && is_ts_pattern_import(&import.src.value.to_string_lossy()) {
             import.specifiers.push(specifier());
             return;
         }
@@ -1100,6 +1104,17 @@ const result = match(input).with("ok", () => true).exhaustive();"#,
             output.contains("throw new NonExhaustiveError(_tsPatternInput)"),
             "{output}"
         );
+    }
+
+    #[test]
+    fn supports_deno_npm_ts_pattern_imports() {
+        let output = transform(
+            r#"import { match } from "npm:ts-pattern";
+const result = match(input).with("ok", () => true).otherwise(() => false);"#,
+        );
+
+        assert!(output.contains("switch"), "{output}");
+        assert!(output.contains("case \"ok\""), "{output}");
     }
 
     #[test]

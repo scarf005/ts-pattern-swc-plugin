@@ -5,8 +5,24 @@
   "license": "MIT",
   "type": "commonjs",
   "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+  "exports": {
+    ".": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    "./wasm": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    "./loader": "./loader.mjs",
+    "./register": "./register.mjs",
+    "./run": "./run.mjs",
+    "./transform": "./transform.mjs",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "ts-pattern-swc": "./run.mjs"
+  },
   "files": [
     "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    "loader.mjs",
+    "register.mjs",
+    "run.mjs",
+    "transform.mjs",
     "README.md"
   ],
   "scripts": {
@@ -19,7 +35,10 @@
     "ts-pattern",
     "pattern-matching"
   ],
+  "dependencies": {
+    "@swc/core": "^1.15.33"
+  },
   "peerDependencies": {
-    "@swc/core": ">=1.5.0"
+    "ts-pattern": ">=5.0.0"
   }
 }

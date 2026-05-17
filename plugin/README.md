@@ -30,7 +30,7 @@ Literal-only top-level matches are emitted as `switch` statements.
 npm install ts-pattern-swc-plugin
 ```
 
-## Configure
+## Configure SWC
 
 ```json
 {
@@ -41,6 +41,61 @@ npm install ts-pattern-swc-plugin
   }
 }
 ```
+
+## Run TypeScript directly
+
+The package also ships a Node/Deno loader that compiles `.ts`, `.tsx`, `.mts`, and `.cts` files with the plugin before evaluation.
+
+### Node.js
+
+Install the runtime dependencies in your project:
+
+```sh
+npm install ts-pattern ts-pattern-swc-plugin @swc/core
+```
+
+Run an entrypoint through the bundled CLI:
+
+```sh
+npx ts-pattern-swc ./foo.ts
+```
+
+Or preload the loader for regular Node execution:
+
+```sh
+node --import ts-pattern-swc-plugin/register ./foo.ts
+```
+
+### Deno
+
+Deno needs a version with `node:module` `register()` loader hooks. Use `import { match } from "ts-pattern"` with a `deno.json` import map, or `import { match } from "npm:ts-pattern"`. Run via npm specifiers:
+
+```sh
+deno run -A npm:ts-pattern-swc-plugin/run ./foo.ts
+```
+
+Or preload the loader:
+
+```sh
+deno run -A --import npm:ts-pattern-swc-plugin/register ./foo.ts
+```
+
+For local development from this repository:
+
+```sh
+deno run -A --import ./plugin/register.mjs ./foo.ts
+```
+
+### Programmatic transform
+
+```ts
+import { transformTsPattern } from "ts-pattern-swc-plugin/transform";
+
+const result = await transformTsPattern(source, { filename: "foo.ts" });
+console.log(result.code);
+```
+
+Set `TS_PATTERN_SWC_PLUGIN_PATH` when you want to use a custom-built plugin wasm file.
 
 ## Supported input
 
