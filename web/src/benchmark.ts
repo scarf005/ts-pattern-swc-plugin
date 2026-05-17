@@ -1,4 +1,4 @@
-import { formatValue, type Runnable } from "./runtime.ts"
+import { formatValue, type ModuleExports, type Runnable } from "./runtime.ts"
 
 export type BenchResult = { ms: number }
 export type BenchmarkModule = { code: string; run: Runnable; inputs: unknown[] }
@@ -18,7 +18,23 @@ export type BenchmarkComparison =
 export type BenchmarkFormatOptions = {
   count: number
   inputCount: number
+  generatedInputCount: number
+  checkedInputCount: number
+  rejectedInputCount: number
   runtimeLabel: string
+}
+
+export type BenchmarkInputPair = {
+  baselineInput: unknown
+  optimizedInput: unknown
+}
+
+export type BenchmarkInputs = {
+  baselineInputs: unknown[]
+  optimizedInputs: unknown[]
+  generatedInputCount: number
+  checkedInputCount: number
+  rejectedInputCount: number
 }
 
 type BenchmarkOrder = "baseline" | "optimized"
@@ -56,6 +72,87 @@ const median = (results: BenchResult[]): BenchResult =>
   [...results].sort((left, right) => left.ms - right.ms)[
     Math.floor(results.length / 2)
   ]
+
+type RunOutcome =
+  | { ok: true; value: unknown }
+  | { ok: false; error: unknown }
+
+const runOutcome = (run: Runnable, input: unknown): RunOutcome => {
+  try {
+    return { ok: true, value: run(input) }
+  } catch (error) {
+    return { ok: false, error }
+  }
+}
+
+const outcomesEqual = (left: RunOutcome, right: RunOutcome) =>
+  left.ok === right.ok &&
+  (left.ok && right.ok
+    ? formatValue(left.value) === formatValue(right.value)
+    : true)
+
+export const prepareBenchmarkInputs = (
+  options: {
+    baseline: ModuleExports
+    optimized: ModuleExports
+    fallbackInputs: unknown[]
+    generatedInputPairs: BenchmarkInputPair[]
+  },
+): BenchmarkInputs => {
+  const baselineInputs = options.baseline.inputs?.length
+    ? options.baseline.inputs
+    : options.fallbackInputs
+  const optimizedInputs = options.optimized.inputs?.length
+    ? options.optimized.inputs
+    : options.fallbackInputs
+
+  if (baselineInputs.length !== optimizedInputs.length) {
+    throw new Error("Benchmark input length differs")
+  }
+
+  const candidates = [
+    ...baselineInputs.map((input, index) => ({
+      baselineInput: input,
+      optimizedInput: optimizedInputs[index],
+    })),
+    ...options.generatedInputPairs,
+  ]
+  const preparedBaselineInputs: unknown[] = []
+  const preparedOptimizedInputs: unknown[] = []
+  let rejectedInputCount = 0
+
+  for (const [index, input] of candidates.entries()) {
+    const baselineOutcome = runOutcome(
+      options.baseline.run,
+      input.baselineInput,
+    )
+    const optimizedOutcome = runOutcome(
+      options.optimized.run,
+      input.optimizedInput,
+    )
+    if (!outcomesEqual(baselineOutcome, optimizedOutcome)) {
+      throw new Error(`Benchmark output ${index} differs`)
+    }
+    if (baselineOutcome.ok) {
+      preparedBaselineInputs.push(input.baselineInput)
+      preparedOptimizedInputs.push(input.optimizedInput)
+    } else {
+      rejectedInputCount += 1
+    }
+  }
+
+  if (preparedBaselineInputs.length === 0) {
+    throw new Error("No benchmarkable inputs")
+  }
+
+  return {
+    baselineInputs: preparedBaselineInputs,
+    optimizedInputs: preparedOptimizedInputs,
+    generatedInputCount: options.generatedInputPairs.length,
+    checkedInputCount: candidates.length,
+    rejectedInputCount,
+  }
+}
 
 export const benchmarkModules = (
   options: {
@@ -127,7 +224,7 @@ export const formatBenchmarkComparison = (
 ): string =>
   result.identicalCode ? result.note : [
     `${options.runtimeLabel}: ${result.sampleCount} samples × ${options.count} iterations/sample`,
-    `inputs: ${options.inputCount} values, cycled during each sample`,
+    `inputs: ${options.inputCount} benchmarked, ${options.generatedInputCount} generated, ${options.checkedInputCount} checked, ${options.rejectedInputCount} rejected`,
     `ts-pattern: ${formatMs(result.baseline.ms)} ms/sample (${
       formatUs(result.baseline.ms, options.count)
     } µs/iteration)`,

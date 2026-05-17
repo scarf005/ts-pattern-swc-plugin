@@ -1,6 +1,8 @@
 /// <reference lib="deno.ns" />
 
-import { formatValue, getModule, type ModuleExports } from "./src/runtime.ts"
+import { prepareBenchmarkInputs } from "./src/benchmark.ts"
+import { garbageInputPairsForInputs, seedFromString } from "./src/property.ts"
+import { getModule, type ModuleExports } from "./src/runtime.ts"
 import { pluginPath, transformWithSwcWasm } from "./src/swc-wasm-transform.ts"
 
 type BenchExample = {
@@ -41,27 +43,22 @@ const loadExample = async (name: string): Promise<BenchExample> => {
   if (!optimized.inputs?.length) {
     throw new Error(`${name}: missing optimized inputs`)
   }
-  if (baseline.inputs.length !== optimized.inputs.length) {
-    throw new Error(`${name}: input length differs`)
-  }
 
-  for (const [index, baselineInput] of baseline.inputs.entries()) {
-    const optimizedInput = optimized.inputs[index]
-    if (formatValue(baselineInput) !== formatValue(optimizedInput)) {
-      throw new Error(`${name}: input ${index} differs`)
-    }
-    if (
-      formatValue(baseline.run(baselineInput)) !==
-        formatValue(optimized.run(optimizedInput))
-    ) {
-      throw new Error(`${name}: output ${index} differs`)
-    }
-  }
+  const inputs = prepareBenchmarkInputs({
+    baseline,
+    optimized,
+    fallbackInputs: baseline.inputs,
+    generatedInputPairs: garbageInputPairsForInputs(
+      baseline.inputs,
+      optimized.inputs,
+      { seed: seedFromString(name), count: 64 },
+    ),
+  })
 
   return {
     id: name.replace(/\.ts$/, ""),
-    baseline: { run: baseline.run, inputs: baseline.inputs },
-    optimized: { run: optimized.run, inputs: optimized.inputs },
+    baseline: { run: baseline.run, inputs: inputs.baselineInputs },
+    optimized: { run: optimized.run, inputs: inputs.optimizedInputs },
   }
 }
 

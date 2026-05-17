@@ -9,7 +9,14 @@ import {
   formatBenchmarkComparison,
   getBenchmarkSink,
   measure,
+  prepareBenchmarkInputs,
 } from "./benchmark.ts"
+import {
+  garbageInputPairsForInputs,
+  garbageValues,
+  seedFromString,
+} from "./property.ts"
+import { formatValue } from "./runtime.ts"
 
 Deno.test("benchmarkOrder alternates execution order", () => {
   assertEquals(benchmarkOrder(5), [
@@ -19,6 +26,36 @@ Deno.test("benchmarkOrder alternates execution order", () => {
     ["optimized", "baseline"],
     ["baseline", "optimized"],
   ])
+})
+
+Deno.test("garbageValues generates deterministic edge-case inputs", () => {
+  const seed = seedFromString("intro-html")
+
+  assertEquals(
+    garbageValues({ seed, count: 4 }).map(formatValue),
+    garbageValues({ seed, count: 4 }).map(formatValue),
+  )
+  assertEquals(garbageValues({ seed, count: 4 }).slice(0, 4), [
+    null,
+    undefined,
+    true,
+    false,
+  ])
+})
+
+Deno.test("garbageInputPairsForInputs uses fast-check to preserve paired input shape", () => {
+  assertEquals(
+    garbageInputPairsForInputs([["a", "b"]], [["a", "b"]], {
+      seed: 1,
+      count: 4,
+    }).every((pair) =>
+      Array.isArray(pair.baselineInput) &&
+      Array.isArray(pair.optimizedInput) &&
+      pair.baselineInput.length === 2 &&
+      pair.optimizedInput.length === 2
+    ),
+    true,
+  )
 })
 
 Deno.test("benchmarkInputsEqual compares formatted values", () => {
@@ -39,6 +76,71 @@ Deno.test("measure times run(input) without formatting results", () => {
 
   assertEquals(typeof bench.ms, "number")
   assertEquals(getBenchmarkSink(), result)
+})
+
+Deno.test("prepareBenchmarkInputs validates generated garbage before benchmarking", () => {
+  const baseline = {
+    run: (input: unknown) => {
+      if (input === "throw") throw new Error("same")
+      return input === "ok" ? 1 : 0
+    },
+    inputs: ["ok"],
+  }
+  const optimized = {
+    run: (input: unknown) => {
+      if (input === "throw") throw new Error("same")
+      return input === "ok" ? 1 : 0
+    },
+    inputs: ["ok"],
+  }
+
+  assertEquals(
+    prepareBenchmarkInputs({
+      baseline,
+      optimized,
+      fallbackInputs: [],
+      generatedInputPairs: [
+        { baselineInput: "garbage", optimizedInput: "garbage" },
+        { baselineInput: "throw", optimizedInput: "throw" },
+      ],
+    }),
+    {
+      baselineInputs: ["ok", "garbage"],
+      optimizedInputs: ["ok", "garbage"],
+      generatedInputCount: 2,
+      checkedInputCount: 3,
+      rejectedInputCount: 1,
+    },
+  )
+})
+
+Deno.test("prepareBenchmarkInputs keeps compiled module inputs paired", () => {
+  class BaselineClass {}
+  class OptimizedClass {}
+  const baselineInput = new BaselineClass()
+  const optimizedInput = new OptimizedClass()
+
+  assertEquals(
+    prepareBenchmarkInputs({
+      baseline: {
+        run: (input) => input instanceof BaselineClass ? "matched" : "missed",
+        inputs: [baselineInput],
+      },
+      optimized: {
+        run: (input) => input instanceof OptimizedClass ? "matched" : "missed",
+        inputs: [optimizedInput],
+      },
+      fallbackInputs: [],
+      generatedInputPairs: [],
+    }),
+    {
+      baselineInputs: [baselineInput],
+      optimizedInputs: [optimizedInput],
+      generatedInputCount: 0,
+      checkedInputCount: 1,
+      rejectedInputCount: 0,
+    },
+  )
 })
 
 Deno.test("benchmarkModules reports identical generated code", () => {
@@ -66,11 +168,14 @@ Deno.test("formatBenchmarkComparison labels samples and iterations", () => {
     }, {
       count: 100000,
       inputCount: 3,
+      generatedInputCount: 64,
+      checkedInputCount: 67,
+      rejectedInputCount: 4,
       runtimeLabel: "browser benchmark",
     }),
     [
       "browser benchmark: 7 samples × 100000 iterations/sample",
-      "inputs: 3 values, cycled during each sample",
+      "inputs: 3 benchmarked, 64 generated, 67 checked, 4 rejected",
       "ts-pattern: 94.00 ms/sample (0.940 µs/iteration)",
       "compiled: 2.00 ms/sample (0.020 µs/iteration)",
       "ts-pattern SWC plugin: 47.00x faster than ts-pattern",

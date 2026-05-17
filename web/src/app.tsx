@@ -5,12 +5,13 @@ import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import {
-  benchmarkInputsEqual,
   benchmarkModules,
   formatBenchmarkComparison,
+  prepareBenchmarkInputs,
 } from "./benchmark.ts"
 import { type ModuleType, transformInBrowser } from "./browser-transform.ts"
 import { cycleValue, getWheelStep } from "./example-wheel.ts"
+import { garbageInputPairsForInputs, seedFromString } from "./property.ts"
 import { formatValue, getModule } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
@@ -310,44 +311,43 @@ const runBenchmark = async () => {
     ])
     const baseline = getModule(baselineCode)
     const optimized = getModule(compiledCode)
-    const baselineInputs = baseline.inputs?.length
+    const baselineDeclaredInputs = baseline.inputs?.length
       ? baseline.inputs
       : defaultBenchmarkInputs
-    const optimizedInputs = optimized.inputs?.length
+    const optimizedDeclaredInputs = optimized.inputs?.length
       ? optimized.inputs
       : defaultBenchmarkInputs
-
-    if (!benchmarkInputsEqual(baselineInputs, optimizedInputs)) {
-      throw new Error("Benchmark inputs differ")
-    }
-
-    for (const [index, baselineInput] of baselineInputs.entries()) {
-      const optimizedInput = optimizedInputs[index]
-      if (
-        formatValue(baseline.run(baselineInput)) !==
-          formatValue(optimized.run(optimizedInput))
-      ) {
-        throw new Error("Benchmark outputs differ")
-      }
-    }
+    const benchmarkInputs = prepareBenchmarkInputs({
+      baseline,
+      optimized,
+      fallbackInputs: defaultBenchmarkInputs,
+      generatedInputPairs: garbageInputPairsForInputs(
+        baselineDeclaredInputs,
+        optimizedDeclaredInputs,
+        { seed: seedFromString(source.value), count: 64 },
+      ),
+    })
 
     const result = benchmarkModules({
       baseline: {
         code: baselineCode,
         run: baseline.run,
-        inputs: baselineInputs,
+        inputs: benchmarkInputs.baselineInputs,
       },
       optimized: {
         code: compiledCode,
         run: optimized.run,
-        inputs: optimizedInputs,
+        inputs: benchmarkInputs.optimizedInputs,
       },
       count,
     })
 
     benchmarkStatus.value = formatBenchmarkComparison(result, {
       count,
-      inputCount: baselineInputs.length,
+      inputCount: benchmarkInputs.baselineInputs.length,
+      generatedInputCount: benchmarkInputs.generatedInputCount,
+      checkedInputCount: benchmarkInputs.checkedInputCount,
+      rejectedInputCount: benchmarkInputs.rejectedInputCount,
       runtimeLabel: "browser benchmark",
     })
   } catch (error) {
