@@ -23,6 +23,8 @@ struct TsPatternTransformer {
     match_imports: HashSet<Id>,
     p_imports: HashSet<Id>,
     namespaces: HashSet<Id>,
+    non_exhaustive_error: Option<Expr>,
+    needs_non_exhaustive_error_import: bool,
 }
 
 #[derive(Clone)]
@@ -49,6 +51,9 @@ impl VisitMut for TsPatternTransformer {
     fn visit_mut_module(&mut self, module: &mut Module) {
         self.collect_imports(module);
         module.visit_mut_children_with(self);
+        if self.needs_non_exhaustive_error_import {
+            add_non_exhaustive_error_import(module);
+        }
     }
 
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
@@ -89,11 +94,19 @@ impl TsPatternTransformer {
                             "P" => {
                                 self.p_imports.insert(named.local.to_id());
                             }
+                            "NonExhaustiveError" => {
+                                self.non_exhaustive_error =
+                                    Some(Expr::Ident(named.local.clone().into()));
+                            }
                             _ => {}
                         }
                     }
                     ImportSpecifier::Namespace(namespace) => {
                         self.namespaces.insert(namespace.local.to_id());
+                        self.non_exhaustive_error = Some(member_expr(
+                            Expr::Ident(namespace.local.clone().into()),
+                            "NonExhaustiveError",
+                        ));
                     }
                     ImportSpecifier::Default(_) => {}
                 }
@@ -212,7 +225,7 @@ impl TsPatternTransformer {
         }
     }
 
-    fn compile_chain(&self, chain: MatchChain) -> Option<Expr> {
+    fn compile_chain(&mut self, chain: MatchChain) -> Option<Expr> {
         if chain.arms.iter().all(is_switchable_arm) {
             Some(self.compile_switch(chain))
         } else {
@@ -220,7 +233,7 @@ impl TsPatternTransformer {
         }
     }
 
-    fn compile_switch(&self, chain: MatchChain) -> Expr {
+    fn compile_switch(&mut self, chain: MatchChain) -> Expr {
         let input_ident = private_ident!("_tsPatternInput");
         let input_expr = ident_expr(&input_ident);
         let mut cases = Vec::new();
@@ -244,10 +257,12 @@ impl TsPatternTransformer {
             }
         }
 
+        let exhaustive_error_callee =
+            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
         cases.push(SwitchCase {
             span: DUMMY_SP,
             test: None,
-            cons: fallback_stmts(chain.fallback, input_expr),
+            cons: fallback_stmts(chain.fallback, input_expr, exhaustive_error_callee),
         });
 
         iife(vec![
@@ -260,10 +275,10 @@ impl TsPatternTransformer {
         ])
     }
 
-    fn compile_if_chain(&self, chain: MatchChain) -> Option<Expr> {
+    fn compile_if_chain(&mut self, chain: MatchChain) -> Option<Expr> {
         if can_inline_input(&chain.input) && matches!(chain.fallback, Fallback::Otherwise(_)) {
             let input = *chain.input;
-            let mut expression = fallback_expr(chain.fallback, input.clone());
+            let mut expression = fallback_expr(chain.fallback, input.clone(), None);
 
             for arm in chain.arms.into_iter().rev() {
                 expression = cond_expr(
@@ -277,7 +292,13 @@ impl TsPatternTransformer {
         }
 
         let input_ident = private_ident!("_tsPatternInput");
-        let mut expression = fallback_expr(chain.fallback, ident_expr(&input_ident));
+        let exhaustive_error_callee =
+            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
+        let mut expression = fallback_expr(
+            chain.fallback,
+            ident_expr(&input_ident),
+            exhaustive_error_callee,
+        );
 
         for arm in chain.arms.into_iter().rev() {
             expression = cond_expr(
@@ -291,6 +312,16 @@ impl TsPatternTransformer {
             const_stmt(input_ident, *chain.input),
             return_stmt(expression),
         ]))
+    }
+
+    fn exhaustive_error_callee(&mut self) -> Expr {
+        match &self.non_exhaustive_error {
+            Some(callee) => callee.clone(),
+            None => {
+                self.needs_non_exhaustive_error_import = true;
+                Expr::Ident(quote_ident!("NonExhaustiveError").into())
+            }
+        }
     }
 
     fn pattern_test(&self, value: Expr, pattern: &Expr) -> Option<Expr> {
@@ -451,8 +482,17 @@ impl TsPatternTransformer {
 
             let prop_access = prop_access(value.clone(), &key_value.key)?;
             let test = self.pattern_test(prop_access, &key_value.value)?;
+            let test = if self.is_optional_pattern(&key_value.value) {
+                test
+            } else {
+                and(prop_in_object(&key_value.key, value.clone())?, test)
+            };
             Some(and(acc, test))
         })
+    }
+
+    fn is_optional_pattern(&self, pattern: &Expr) -> bool {
+        self.is_p_call(pattern, "optional").is_some()
     }
 
     fn array_test(&self, value: Expr, array: &ArrayLit) -> Option<Expr> {
@@ -498,6 +538,44 @@ fn module_export_name(name: &ModuleExportName) -> String {
         ModuleExportName::Ident(ident) => ident.sym.to_string(),
         ModuleExportName::Str(str) => str.value.to_string_lossy().to_string(),
     }
+}
+
+fn add_non_exhaustive_error_import(module: &mut Module) {
+    let specifier = || {
+        ImportSpecifier::Named(ImportNamedSpecifier {
+            span: DUMMY_SP,
+            local: quote_ident!("NonExhaustiveError").into(),
+            imported: None,
+            is_type_only: false,
+        })
+    };
+
+    for item in &mut module.body {
+        let ModuleItem::ModuleDecl(ModuleDecl::Import(import)) = item else {
+            continue;
+        };
+
+        if !import.type_only && &*import.src.value == "ts-pattern" {
+            import.specifiers.push(specifier());
+            return;
+        }
+    }
+
+    module.body.insert(
+        0,
+        ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
+            span: DUMMY_SP,
+            specifiers: vec![specifier()],
+            src: Box::new(Str {
+                span: DUMMY_SP,
+                value: "ts-pattern".into(),
+                raw: None,
+            }),
+            type_only: false,
+            with: None,
+            phase: Default::default(),
+        })),
+    );
 }
 
 fn parse_with_arm(call: &CallExpr) -> Option<MatchArm> {
@@ -553,10 +631,7 @@ fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> 
     };
 
     match &arm.guard {
-        Some(guard) => Some(and(
-            pattern_test,
-            call_expr((**guard).clone(), vec![input]),
-        )),
+        Some(guard) => Some(and(pattern_test, call_expr((**guard).clone(), vec![input]))),
         None => Some(pattern_test),
     }
 }
@@ -675,34 +750,44 @@ fn const_stmt(ident: Ident, init: Expr) -> Stmt {
     })))
 }
 
-fn fallback_stmts(fallback: Fallback, input_expr: Expr) -> Vec<Stmt> {
+fn fallback_stmts(
+    fallback: Fallback,
+    input_expr: Expr,
+    exhaustive_error_callee: Option<Expr>,
+) -> Vec<Stmt> {
     match fallback {
         Fallback::Otherwise(handler) => vec![return_stmt(handler_result(handler, input_expr))],
-        Fallback::Exhaustive => vec![throw_exhaustive_stmt()],
+        Fallback::Exhaustive => vec![throw_exhaustive_stmt(
+            exhaustive_error_callee.expect("exhaustive error callee"),
+            input_expr,
+        )],
     }
 }
 
-fn fallback_expr(fallback: Fallback, input_expr: Expr) -> Expr {
+fn fallback_expr(
+    fallback: Fallback,
+    input_expr: Expr,
+    exhaustive_error_callee: Option<Expr>,
+) -> Expr {
     match fallback {
         Fallback::Otherwise(handler) => handler_result(handler, input_expr),
-        Fallback::Exhaustive => iife(vec![throw_exhaustive_stmt()]),
+        Fallback::Exhaustive => iife(vec![throw_exhaustive_stmt(
+            exhaustive_error_callee.expect("exhaustive error callee"),
+            input_expr,
+        )]),
     }
 }
 
-fn throw_exhaustive_stmt() -> Stmt {
+fn throw_exhaustive_stmt(callee: Expr, input_expr: Expr) -> Stmt {
     Stmt::Throw(ThrowStmt {
         span: DUMMY_SP,
         arg: Box::new(Expr::New(NewExpr {
             span: DUMMY_SP,
             ctxt: Default::default(),
-            callee: Box::new(Expr::Ident(quote_ident!("Error").into())),
+            callee: Box::new(callee),
             args: Some(vec![ExprOrSpread {
                 spread: None,
-                expr: Box::new(Expr::Lit(Lit::Str(Str {
-                    span: DUMMY_SP,
-                    value: "Non-exhaustive ts-pattern match".into(),
-                    raw: None,
-                }))),
+                expr: Box::new(input_expr),
             }]),
             type_args: None,
         })),
@@ -726,16 +811,19 @@ fn handler_result(handler: Box<Expr>, input_expr: Expr) -> Expr {
             ..
         }) if params.is_empty() => match *body {
             BlockStmtOrExpr::Expr(expr) => *expr,
-            BlockStmtOrExpr::BlockStmt(block) => call_handler(Box::new(Expr::Arrow(ArrowExpr {
-                span: DUMMY_SP,
-                ctxt: Default::default(),
-                params,
-                body: Box::new(BlockStmtOrExpr::BlockStmt(block)),
-                is_async: false,
-                is_generator: false,
-                type_params: None,
-                return_type: None,
-            })), input_expr),
+            BlockStmtOrExpr::BlockStmt(block) => call_handler(
+                Box::new(Expr::Arrow(ArrowExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    params,
+                    body: Box::new(BlockStmtOrExpr::BlockStmt(block)),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                })),
+                input_expr,
+            ),
         },
         handler => call_handler(Box::new(handler), input_expr),
     }
@@ -792,6 +880,24 @@ fn computed_member_expr(obj: Expr, prop: Expr) -> Expr {
             expr: Box::new(prop),
         }),
     })
+}
+
+fn prop_in_object(key: &PropName, obj: Expr) -> Option<Expr> {
+    Some(bin(BinaryOp::In, prop_key_expr(key)?, obj))
+}
+
+fn prop_key_expr(key: &PropName) -> Option<Expr> {
+    match key {
+        PropName::Ident(ident) => Some(Expr::Lit(Lit::Str(Str {
+            span: DUMMY_SP,
+            value: ident.sym.clone().into(),
+            raw: None,
+        }))),
+        PropName::Str(str) => Some(Expr::Lit(Lit::Str(str.clone()))),
+        PropName::Num(num) => Some(Expr::Lit(Lit::Num(num.clone()))),
+        PropName::BigInt(bigint) => Some(Expr::Lit(Lit::BigInt(bigint.clone()))),
+        PropName::Computed(computed) => Some((*computed.expr).clone()),
+    }
 }
 
 fn strict_eq(left: Expr, right: Expr) -> Expr {
@@ -952,6 +1058,48 @@ const result = match(value).with(P.union(P.string, P.number), () => "scalar").wi
         assert!(!output.contains("(() => \"scalar\")("), "{output}");
         assert!(output.contains("typeof value === \"string\""), "{output}");
         assert!(output.contains("? \"scalar\""), "{output}");
+    }
+
+    #[test]
+    fn requires_object_key_for_wildcard_property() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId: P._ }, () => "team").exhaustive();"#,
+        );
+
+        assert!(
+            output.contains("\"storeId\" in _tsPatternInput"),
+            "{output}"
+        );
+        assert!(output.contains("\"teamId\" in _tsPatternInput"), "{output}");
+    }
+
+    #[test]
+    fn requires_object_key_for_undefined_property() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+const result = match(input).with({ type: undefined }, () => true).exhaustive();"#,
+        );
+
+        assert!(output.contains("\"type\" in _tsPatternInput"), "{output}");
+        assert!(
+            output.contains("_tsPatternInput.type === undefined"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn throws_ts_pattern_non_exhaustive_error() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+const result = match(input).with("ok", () => true).exhaustive();"#,
+        );
+
+        assert!(output.contains("NonExhaustiveError"), "{output}");
+        assert!(
+            output.contains("throw new NonExhaustiveError(_tsPatternInput)"),
+            "{output}"
+        );
     }
 
     #[test]
