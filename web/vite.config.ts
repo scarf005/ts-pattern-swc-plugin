@@ -1,14 +1,19 @@
 import { defineConfig, type Plugin } from "vite"
 import deno from "@deno/vite-plugin"
 import preact from "@preact/preset-vite"
-import { transform } from "@swc/core"
 import { existsSync, readFileSync } from "node:fs"
 import { Buffer } from "node:buffer"
 import { spawnSync } from "node:child_process"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
+import {
+  hasSwcWasmBinding,
+  type ModuleType,
+  pluginPath,
+  pluginRoot,
+  transformWithSwcWasm,
+} from "./src/swc-wasm-transform.ts"
 
-type ModuleType = "es6" | "commonjs"
 type TransformRequest = {
   code?: unknown
   plugin?: unknown
@@ -16,14 +21,14 @@ type TransformRequest = {
 }
 
 const root = dirname(fileURLToPath(import.meta.url))
-const pluginRoot = resolve(root, "../plugin")
-const pluginPath = resolve(
-  pluginRoot,
-  "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
-)
 const indexPath = resolve(root, "index.html")
 
 const ensurePluginBuilt = () => {
+  if (!hasSwcWasmBinding()) {
+    throw new Error(
+      "Run `cd plugin && npm install` before starting the playground",
+    )
+  }
   if (existsSync(pluginPath)) return
   const result = spawnSync("cargo", [
     "build",
@@ -92,18 +97,10 @@ const transformApi = (): Plugin => ({
         const moduleType: ModuleType = body.moduleType === "commonjs"
           ? "commonjs"
           : "es6"
-        const plugins: [string, Record<string, never>][] = body.plugin === false
-          ? []
-          : [[pluginPath, {}]]
-        const result = await transform(body.code, {
-          filename: "input.ts",
-          sourceMaps: false,
-          jsc: {
-            parser: { syntax: "typescript", tsx: false },
-            target: "es2022",
-            experimental: { plugins },
-          },
-          module: { type: moduleType },
+        const result = await transformWithSwcWasm({
+          code: body.code,
+          moduleType,
+          plugin: body.plugin !== false,
         })
 
         response.setHeader("content-type", "application/json")

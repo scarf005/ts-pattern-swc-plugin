@@ -1,16 +1,9 @@
 /// <reference lib="deno.ns" />
 
 import { assert, assertEquals } from "jsr:@std/assert"
-import { fromFileUrl } from "jsr:@std/path/from-file-url"
-import { transform } from "@swc/core"
 import { formatValue, getModule } from "./runtime.ts"
+import { pluginPath, transformWithSwcWasm } from "./swc-wasm-transform.ts"
 
-const pluginPath = fromFileUrl(
-  new URL(
-    "../../plugin/target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
-    import.meta.url,
-  ),
-)
 const examplesRoot = new URL("../../examples/", import.meta.url)
 
 const transformExample = async (
@@ -18,17 +11,10 @@ const transformExample = async (
   options: { plugin: boolean },
 ) =>
   getModule(
-    (await transform(source, {
-      filename: "input.ts",
-      sourceMaps: false,
-      jsc: {
-        parser: { syntax: "typescript", tsx: false },
-        target: "es2022",
-        experimental: {
-          plugins: options.plugin ? [[pluginPath, {}]] : [],
-        },
-      },
-      module: { type: "commonjs" },
+    (await transformWithSwcWasm({
+      code: source,
+      moduleType: "commonjs",
+      plugin: options.plugin,
     })).code,
   )
 
@@ -93,15 +79,10 @@ Deno.test("all match-based examples are compiled away", async () => {
     const source = await Deno.readTextFile(new URL(name, examplesRoot))
     if (!source.includes("match(")) continue
 
-    const output = (await transform(source, {
-      filename: name,
-      sourceMaps: false,
-      jsc: {
-        parser: { syntax: "typescript", tsx: false },
-        target: "es2022",
-        experimental: { plugins: [[pluginPath, {}]] },
-      },
-      module: { type: "commonjs" },
+    const output = (await transformWithSwcWasm({
+      code: source,
+      moduleType: "commonjs",
+      plugin: true,
     })).code
 
     assert(!output.includes(".with("), `${name}: still contains .with()`)
