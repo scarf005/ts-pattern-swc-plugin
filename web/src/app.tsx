@@ -4,6 +4,8 @@ import "./app.css"
 import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import { match, P } from "ts-pattern"
+import initSwc, { transform } from "@swc/wasm-web"
+import swcWasmUrl from "@swc/wasm-web/wasm_bg.wasm?url"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
@@ -189,6 +191,208 @@ const configureTypeScript = () => {
 
 configureTypeScript()
 
+const swcReady = initSwc({ module_or_path: swcWasmUrl })
+
+const findMatch = (source: string, openIndex: number) => {
+  let depth = 0
+  let quote = ""
+  let escaped = false
+  for (let index = openIndex; index < source.length; index += 1) {
+    const char = source[index]
+    if (quote) {
+      escaped = !escaped && char === "\\"
+      if (!escaped && char === quote) quote = ""
+      if (char !== "\\") escaped = false
+      continue
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char
+      continue
+    }
+    if (char === "(" || char === "{" || char === "[") depth += 1
+    if (char === ")" || char === "}" || char === "]") depth -= 1
+    if (depth === 0) return index
+  }
+  return -1
+}
+
+const splitTopLevel = (value: string) => {
+  const parts: string[] = []
+  let depth = 0
+  let quote = ""
+  let escaped = false
+  let start = 0
+  for (let index = 0; index < value.length; index += 1) {
+    const char = value[index]
+    if (quote) {
+      escaped = !escaped && char === "\\"
+      if (!escaped && char === quote) quote = ""
+      if (char !== "\\") escaped = false
+      continue
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char
+      continue
+    }
+    if (char === "(" || char === "{" || char === "[") depth += 1
+    if (char === ")" || char === "}" || char === "]") depth -= 1
+    if (char === "," && depth === 0) {
+      parts.push(value.slice(start, index).trim())
+      start = index + 1
+    }
+  }
+  parts.push(value.slice(start).trim())
+  return parts.filter(Boolean)
+}
+
+const propExpr = (input: string, key: string) =>
+  /^[A-Za-z_$][\w$]*$/.test(key)
+    ? `${input}.${key}`
+    : `${input}[${JSON.stringify(key)}]`
+
+const patternTest = (input: string, pattern: string): string => {
+  const trimmed = pattern.trim()
+  if (trimmed.startsWith("P.union(") && trimmed.endsWith(")")) {
+    return splitTopLevel(trimmed.slice(8, -1))
+      .map((item) => patternTest(input, item))
+      .join(" || ")
+  }
+  if (trimmed === "P.string") return `typeof ${input} === "string"`
+  if (trimmed === "P.number") return `typeof ${input} === "number"`
+  if (trimmed === "P.boolean") return `typeof ${input} === "boolean"`
+  if (trimmed === "P.bigint") return `typeof ${input} === "bigint"`
+  if (trimmed === "P.symbol") return `typeof ${input} === "symbol"`
+  if (trimmed === "P._") return "true"
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    const entries = splitTopLevel(trimmed.slice(1, -1))
+      .map((entry) =>
+        entry.split(/:(.*)/s).slice(0, 2).map((item) => item.trim())
+      )
+      .filter((entry) => entry.length === 2)
+    return [
+      `${input} !== null && typeof ${input} === "object"`,
+      ...entries.map(([key, value]) =>
+        patternTest(propExpr(input, key.replace(/^['\"]|['\"]$/g, "")), value)
+      ),
+    ].join(" && ")
+  }
+  if (trimmed.startsWith("[") && trimmed.endsWith("]")) {
+    const items = splitTopLevel(trimmed.slice(1, -1))
+    return [
+      `Array.isArray(${input})`,
+      `${input}.length === ${items.length}`,
+      ...items.map((item, index) => patternTest(`${input}[${index}]`, item)),
+    ].join(" && ")
+  }
+  return `${input} === ${trimmed}`
+}
+
+const arrowBody = (handler: string) => {
+  const arrow = handler.indexOf("=>")
+  if (arrow === -1) return undefined
+  const params = handler.slice(0, arrow).trim()
+  const body = handler.slice(arrow + 2).trim()
+  return { params, body }
+}
+
+const handlerResult = (handler: string, input: string) => {
+  const arrow = arrowBody(handler)
+  if (!arrow) return `(${handler})(${input})`
+  if (arrow.params === "()" && !arrow.body.startsWith("{")) return arrow.body
+  return `(${handler})(${input})`
+}
+
+const guardResult = (guard: string, input: string) => {
+  const arrow = arrowBody(guard)
+  return arrow ? `(${guard})(${input})` : `${guard}(${input})`
+}
+
+const isLiteralPattern = (pattern: string) =>
+  /^(?:"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|-?\d+(?:\.\d+)?|true|false|null)$/
+    .test(pattern.trim())
+
+const isSafeInput = (input: string) =>
+  /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/.test(input.trim())
+
+const compileMatch = (
+  input: string,
+  withArgs: string[][],
+  fallback: string,
+) => {
+  const arms = withArgs.map((args) => ({
+    patterns: args.slice(0, args.length >= 3 ? -2 : -1),
+    guard: args.length >= 3 ? args.at(-2) : undefined,
+    handler: args.at(-1) ?? "() => undefined",
+  }))
+  const inputExpr = input.trim()
+  if (arms.every((arm) => !arm.guard && arm.patterns.every(isLiteralPattern))) {
+    return `(()=>{switch(${inputExpr}){${
+      arms.map((arm) =>
+        `${arm.patterns.map((pattern) => `case ${pattern}:`).join("")}return ${
+          handlerResult(arm.handler, inputExpr)
+        };`
+      ).join("")
+    }default:return ${handlerResult(fallback, inputExpr)};}})()`
+  }
+  const value = isSafeInput(inputExpr) ? inputExpr : "_tsPatternInput"
+  const ternary = arms.reduceRight(
+    (alternate, arm) => {
+      const test = arm.patterns.map((pattern) => patternTest(value, pattern))
+        .join(" || ")
+      const guarded = arm.guard
+        ? `${test} && ${guardResult(arm.guard, value)}`
+        : test
+      return `${guarded} ? ${handlerResult(arm.handler, value)} : ${alternate}`
+    },
+    handlerResult(fallback, value),
+  )
+  return value === inputExpr
+    ? ternary
+    : `(()=>{const ${value}=${inputExpr};return ${ternary};})()`
+}
+
+const skipWhitespace = (value: string, index: number) => {
+  while (/\s/.test(value[index] ?? "")) index += 1
+  return index
+}
+
+const transformTsPatternSource = (code: string) => {
+  let output = ""
+  let cursor = 0
+  while (true) {
+    const matchIndex = code.indexOf("match(", cursor)
+    if (matchIndex === -1) return output + code.slice(cursor)
+    const inputStart = matchIndex + "match".length
+    const inputEnd = findMatch(code, inputStart)
+    if (inputEnd === -1) return output + code.slice(cursor)
+    let chainCursor = skipWhitespace(code, inputEnd + 1)
+    const withArgs: string[][] = []
+    while (code.startsWith(".with(", chainCursor)) {
+      const argsStart = chainCursor + ".with".length
+      const argsEnd = findMatch(code, argsStart)
+      if (argsEnd === -1) return output + code.slice(cursor)
+      withArgs.push(splitTopLevel(code.slice(argsStart + 1, argsEnd)))
+      chainCursor = skipWhitespace(code, argsEnd + 1)
+    }
+    if (!code.startsWith(".otherwise(", chainCursor) || withArgs.length === 0) {
+      output += code.slice(cursor, chainCursor)
+      cursor = chainCursor
+      continue
+    }
+    const fallbackStart = chainCursor + ".otherwise".length
+    const fallbackEnd = findMatch(code, fallbackStart)
+    if (fallbackEnd === -1) return output + code.slice(cursor)
+    const fallback = code.slice(fallbackStart + 1, fallbackEnd).trim()
+    output += code.slice(cursor, matchIndex)
+    output += compileMatch(
+      code.slice(inputStart + 1, inputEnd),
+      withArgs,
+      fallback,
+    )
+    cursor = fallbackEnd + 1
+  }
+}
+
 const source = signal(DEFAULT_SOURCE)
 const compiled = signal("")
 const status = signal("Compiling")
@@ -202,16 +406,20 @@ let compileVersion = 0
 applyTheme(theme.value)
 
 const transformSource = async (options: TransformOptions) => {
-  const response = await fetch("/api/transform", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(options),
-  })
-  const payload = await response.json() as { code?: string; error?: string }
-  if (!response.ok || payload.error) {
-    throw new Error(payload.error ?? "Transform failed")
-  }
-  return payload.code ?? ""
+  await swcReady
+  const result = await transform(
+    options.plugin ? transformTsPatternSource(options.code) : options.code,
+    {
+      filename: "input.ts",
+      sourceMaps: false,
+      jsc: {
+        parser: { syntax: "typescript", tsx: false },
+        target: "es2022",
+      },
+      module: { type: options.moduleType },
+    },
+  )
+  return result.code
 }
 
 const compileSource = async (code: string) => {
