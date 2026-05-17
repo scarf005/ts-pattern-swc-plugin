@@ -52,11 +52,32 @@ const commonPatterns = Object.entries(exampleSources)
   .sort((left, right) => left.label.localeCompare(right.label))
 
 const patternIds = commonPatterns.map((pattern) => pattern.id)
+const redirectStorageKey = "ts-pattern-swc-playground-redirect"
 
-const routeForPattern = (id: string) => `/examples/${id}`
+const takeRedirectPath = () => {
+  try {
+    const value = sessionStorage.getItem(redirectStorageKey)
+    if (!value) return location.pathname
+    sessionStorage.removeItem(redirectStorageKey)
+    history.replaceState(null, "", value)
+    return location.pathname
+  } catch {
+    return location.pathname
+  }
+}
+
+const initialPath = takeRedirectPath()
+const appBasePath = (() => {
+  const marker = "/examples/"
+  const index = initialPath.indexOf(marker)
+  if (index >= 0) return initialPath.slice(0, index + 1) || "/"
+  return initialPath.endsWith("/") ? initialPath : `${initialPath}/`
+})()
+
+const routeForPattern = (id: string) => `${appBasePath}examples/${id}`
 
 const patternFromPath = () => {
-  const match = location.pathname.match(/^\/examples\/([^/]+)\/?$/)
+  const match = initialPath.match(/(?:^|\/)examples\/([^/]+)\/?$/)
   const id = match?.[1]
   return commonPatterns.find((pattern) => pattern.id === id) ??
     commonPatterns[0]
