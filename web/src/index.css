@@ -1,12 +1,38 @@
 :root {
+  --bg: #ffffff;
+  --fg: #111111;
+  --panel: #ffffff;
+  --border: #d0d0d0;
+  --selection: #c8ddff;
+  --syntax-keyword: #0000aa;
+  --syntax-string: #007000;
+  --syntax-number: #aa5500;
+  --syntax-comment: #777777;
+  --syntax-type: #7a3e9d;
+  --syntax-punctuation: #555555;
   font-family: system-ui, sans-serif;
-  color: #eee;
-  background: #050505;
+  color: var(--fg);
+  background: var(--bg);
+}
+
+:root[data-theme="dark"] {
+  --bg: #050505;
+  --fg: #eeeeee;
+  --panel: #111111;
+  --border: #333333;
+  --selection: #254f8f;
+  --syntax-keyword: #8ab4ff;
+  --syntax-string: #8fd694;
+  --syntax-number: #f5b66d;
+  --syntax-comment: #888888;
+  --syntax-type: #d6a7ff;
+  --syntax-punctuation: #bbbbbb;
 }
 
 body {
   margin: 0;
   min-width: 320px;
+  background: var(--bg);
 }
 
 #app {

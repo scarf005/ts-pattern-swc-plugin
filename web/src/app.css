@@ -1,16 +1,21 @@
 main {
   display: grid;
+  grid-template-rows: auto 1fr auto;
   gap: 1rem;
   height: 100vh;
   padding: 1rem;
   box-sizing: border-box;
 }
 
-.toolbar {
+.toolbar,
+.controls {
   display: flex;
   align-items: center;
+  gap: 0.5rem;
+}
+
+.toolbar {
   justify-content: space-between;
-  gap: 1rem;
 }
 
 h1 {
@@ -18,12 +23,7 @@ h1 {
   font-size: 1rem;
 }
 
-.benchmark {
-  display: flex;
-  gap: 0.5rem;
-}
-
-.benchmark input {
+.controls input {
   width: 8rem;
 }
 
@@ -34,11 +34,22 @@ h1 {
   min-height: 0;
 }
 
-label {
+.pane {
   display: grid;
   grid-template-rows: auto 1fr;
   gap: 0.5rem;
   min-height: 0;
+}
+
+.code-editor {
+  position: relative;
+  min-height: 0;
+}
+
+.code-editor pre,
+.code-editor textarea {
+  position: absolute;
+  inset: 0;
 }
 
 textarea,
@@ -46,24 +57,39 @@ pre {
   margin: 0;
   min-height: 0;
   padding: 0.75rem;
-  border: 1px solid #333;
+  border: 1px solid var(--border);
   box-sizing: border-box;
   overflow: auto;
-  background: #111;
-  color: #eee;
+  background: var(--panel);
+  color: var(--fg);
   font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  tab-size: 2;
+  white-space: pre;
+}
+
+.code-editor pre {
+  pointer-events: none;
 }
 
 textarea {
   resize: none;
+  background: transparent;
+  color: transparent;
+  caret-color: var(--fg);
+}
+
+textarea::selection {
+  background: var(--selection);
+  color: transparent;
 }
 
 button,
-input {
-  border: 1px solid #333;
+input,
+select {
+  border: 1px solid var(--border);
   padding: 0.5rem 0.75rem;
-  background: #111;
-  color: #eee;
+  background: var(--panel);
+  color: var(--fg);
   font: inherit;
 }
 
@@ -75,13 +101,45 @@ button {
   white-space: pre-wrap;
 }
 
+.token.keyword {
+  color: var(--syntax-keyword);
+}
+
+.token.string {
+  color: var(--syntax-string);
+}
+
+.token.number {
+  color: var(--syntax-number);
+}
+
+.token.comment {
+  color: var(--syntax-comment);
+}
+
+.token.type {
+  color: var(--syntax-type);
+}
+
+.token.punctuation {
+  color: var(--syntax-punctuation);
+}
+
 @media (max-width: 800px) {
+  main {
+    height: auto;
+    min-height: 100vh;
+  }
+
   .toolbar,
+  .controls,
   .panes {
+    display: grid;
     grid-template-columns: 1fr;
   }
 
-  .toolbar {
-    display: grid;
+  .code-editor,
+  .code-output {
+    min-height: 24rem;
   }
 }

@@ -262,29 +262,19 @@ impl TsPatternTransformer {
 
     fn compile_if_chain(&self, chain: MatchChain) -> Option<Expr> {
         let input_ident = private_ident!("_tsPatternInput");
-        let mut else_branch = Some(Box::new(block_stmt(fallback_stmts(
-            chain.fallback,
-            ident_expr(&input_ident),
-        ))));
+        let mut expression = fallback_expr(chain.fallback, ident_expr(&input_ident));
 
         for arm in chain.arms.into_iter().rev() {
-            let test = arm_test(self, &input_ident, &arm)?;
-            let consequent = block_stmt(vec![return_stmt(call_handler(
-                arm.handler,
-                ident_expr(&input_ident),
-            ))]);
-
-            else_branch = Some(Box::new(Stmt::If(IfStmt {
-                span: DUMMY_SP,
-                test: Box::new(test),
-                cons: Box::new(consequent),
-                alt: else_branch,
-            })));
+            expression = cond_expr(
+                arm_test(self, &input_ident, &arm)?,
+                call_handler(arm.handler, ident_expr(&input_ident)),
+                expression,
+            );
         }
 
         Some(iife(vec![
             const_stmt(input_ident, *chain.input),
-            *else_branch.expect("if-chain always has at least one arm"),
+            return_stmt(expression),
         ]))
     }
 
@@ -670,35 +660,38 @@ fn const_stmt(ident: Ident, init: Expr) -> Stmt {
     })))
 }
 
-fn block_stmt(stmts: Vec<Stmt>) -> Stmt {
-    Stmt::Block(BlockStmt {
-        span: DUMMY_SP,
-        ctxt: Default::default(),
-        stmts,
-    })
-}
-
 fn fallback_stmts(fallback: Fallback, input_expr: Expr) -> Vec<Stmt> {
     match fallback {
         Fallback::Otherwise(handler) => vec![return_stmt(call_handler(handler, input_expr))],
-        Fallback::Exhaustive => vec![Stmt::Throw(ThrowStmt {
-            span: DUMMY_SP,
-            arg: Box::new(Expr::New(NewExpr {
-                span: DUMMY_SP,
-                ctxt: Default::default(),
-                callee: Box::new(Expr::Ident(quote_ident!("Error").into())),
-                args: Some(vec![ExprOrSpread {
-                    spread: None,
-                    expr: Box::new(Expr::Lit(Lit::Str(Str {
-                        span: DUMMY_SP,
-                        value: "Non-exhaustive ts-pattern match".into(),
-                        raw: None,
-                    }))),
-                }]),
-                type_args: None,
-            })),
-        })],
+        Fallback::Exhaustive => vec![throw_exhaustive_stmt()],
     }
+}
+
+fn fallback_expr(fallback: Fallback, input_expr: Expr) -> Expr {
+    match fallback {
+        Fallback::Otherwise(handler) => call_handler(handler, input_expr),
+        Fallback::Exhaustive => iife(vec![throw_exhaustive_stmt()]),
+    }
+}
+
+fn throw_exhaustive_stmt() -> Stmt {
+    Stmt::Throw(ThrowStmt {
+        span: DUMMY_SP,
+        arg: Box::new(Expr::New(NewExpr {
+            span: DUMMY_SP,
+            ctxt: Default::default(),
+            callee: Box::new(Expr::Ident(quote_ident!("Error").into())),
+            args: Some(vec![ExprOrSpread {
+                spread: None,
+                expr: Box::new(Expr::Lit(Lit::Str(Str {
+                    span: DUMMY_SP,
+                    value: "Non-exhaustive ts-pattern match".into(),
+                    raw: None,
+                }))),
+            }]),
+            type_args: None,
+        })),
+    })
 }
 
 fn return_stmt(expr: Expr) -> Stmt {
@@ -775,6 +768,15 @@ fn and(left: Expr, right: Expr) -> Expr {
 
 fn or(left: Expr, right: Expr) -> Expr {
     bin(BinaryOp::LogicalOr, left, right)
+}
+
+fn cond_expr(test: Expr, consequent: Expr, alternate: Expr) -> Expr {
+    Expr::Cond(CondExpr {
+        span: DUMMY_SP,
+        test: Box::new(test),
+        cons: Box::new(consequent),
+        alt: Box::new(alternate),
+    })
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
@@ -887,13 +889,14 @@ const result = match(input).with("a", () => 1).with("b", () => 2).otherwise(() =
     }
 
     #[test]
-    fn emits_if_chain_for_object_pattern() {
+    fn emits_ternary_for_object_pattern() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
 const result = match(input).with({ type: "ok", value: P.number }, (value) => value.value).otherwise(() => 0);"#,
         );
 
-        assert!(output.contains("if"), "{output}");
+        assert!(output.contains("?"), "{output}");
+        assert!(output.contains(":"), "{output}");
         assert!(output.contains("typeof"), "{output}");
         assert!(output.contains("value === \"number\""), "{output}");
     }
