@@ -24,42 +24,63 @@ const slugify = (value: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "example"
 
+const usesTsPattern = (code: string) =>
+  /\b(match|isMatching)\s*(?:<[^;{}]*>)?\(/.test(code) || /\bP\./.test(code) ||
+  /\bPattern\./.test(code)
+
+const hasPlaceholder = (code: string) =>
+  /(^|[^.])\.\.\.([^.]|$)/.test(code) ||
+  code.includes("match(...") ||
+  code.includes(".with(...") ||
+  code.includes("MyCustomError") ||
+  code.includes("value = ...")
+
+const isApiSignature = (code: string) =>
+  /^\s*(?:export\s+)?function\s+\w+/.test(code) ||
+  /^\s*match\([^\n]*\);?\s*$/.test(code)
+
+const readsUndeclaredInput = (code: string) =>
+  code.includes("match(input)") &&
+  !/(?:const|let|var|function|declare\s+const)\s+input\b/.test(code) &&
+  !/\(input[):,\s]/.test(code)
+
+const readsUndeclaredValue = (code: string) =>
+  (code.includes("isBlogPost(value)") ||
+    code.includes("isMatching(blogPostPattern, value)")) &&
+  !/(?:const|let|var|declare\s+const)\s+value\b/.test(code)
+
+const usesExternalRuntimeInput = (code: string) =>
+  code.includes("someUrl") || code.includes("fetch(")
+
 const shouldInclude = (language: string, code: string) =>
   ["ts", "typescript"].includes(language) &&
-  code.includes("match(") &&
-  code.includes(".with(") &&
-  (code.includes(".otherwise(") || code.includes(".exhaustive(")) &&
-  !code.includes("...") &&
-  !code.includes("match(...") &&
-  !code.includes(".with(...") &&
-  !code.includes(".returnType") &&
-  !code.includes(".narrow") &&
-  !code.includes(".run()") &&
-  !code.includes("Pattern.") &&
-  !code.includes("P.any") &&
-  !code.includes("NaN") &&
-  !code.includes("P.select") &&
-  !code.includes("P.record") &&
-  !code.includes("P.set") &&
-  !code.includes("P.map") &&
-  !code.includes("P.intersection") &&
-  !/P\.(string|number|bigint)\./.test(code) &&
-  !code.includes("...P.array")
+  usesTsPattern(code) &&
+  !code.trimStart().startsWith(".") &&
+  !hasPlaceholder(code) &&
+  !isApiSignature(code) &&
+  !code.includes("declare const") &&
+  !code.includes("@ts-expect-error") &&
+  !code.includes("❌") &&
+  !readsUndeclaredInput(code) &&
+  !readsUndeclaredValue(code) &&
+  !usesExternalRuntimeInput(code)
 
-const ensureImport = (code: string) =>
-  code.includes("from 'ts-pattern'") || code.includes('from "ts-pattern"')
-    ? code
-    : `import { match, P } from 'ts-pattern';\n\n${code}`
+const ensureImport = (code: string) => {
+  if (
+    code.includes("from 'ts-pattern'") || code.includes('from "ts-pattern"')
+  ) {
+    return code
+  }
 
-const ensureInputDeclaration = (code: string) =>
-  code.includes("type Input") &&
-    code.includes("match(input)") &&
-    !/(?:const|let|var|declare\s+const)\s+input\b/.test(code)
-    ? code.replace(
-      /\nconst output = match\(input\)/,
-      "\ndeclare const input: Input;\n\nconst output = match(input)",
-    )
-    : code
+  const imports = [
+    code.includes("isMatching") ? "isMatching" : undefined,
+    code.includes("match(") ? "match" : undefined,
+    /\bP\./.test(code) ? "P" : undefined,
+    /\bPattern\./.test(code) ? "Pattern" : undefined,
+  ].filter(Boolean).join(", ")
+
+  return imports ? `import { ${imports} } from 'ts-pattern';\n\n${code}` : code
+}
 
 const examples = [...readme.matchAll(/```(\w+)\n([\s\S]*?)```/g)]
   .map((match, index) => ({
@@ -72,10 +93,7 @@ const examples = [...readme.matchAll(/```(\w+)\n([\s\S]*?)```/g)]
   .map(({ code, heading, index }) => ({
     id: `readme-${index}-${slugify(heading)}`,
     label: `README: ${heading}`,
-    source: ensureInputDeclaration(ensureImport(code)).replace(
-      /'ts-pattern'/g,
-      '"ts-pattern"',
-    ),
+    source: ensureImport(code).replace(/'ts-pattern'/g, '"ts-pattern"'),
   }))
 
 await Deno.mkdir(dirname(outputPath), { recursive: true })
