@@ -405,6 +405,53 @@ let compileVersion = 0
 
 applyTheme(theme.value)
 
+const replaceCodeSpans = (
+  code: string,
+  replacements: Array<[string, string]>,
+) => {
+  let output = ""
+  let index = 0
+  let quote = ""
+  let escaped = false
+  while (index < code.length) {
+    const char = code[index]
+    if (quote) {
+      output += char
+      escaped = !escaped && char === "\\"
+      if (!escaped && char === quote) quote = ""
+      if (char !== "\\") escaped = false
+      index += 1
+      continue
+    }
+    if (char === '"' || char === "'" || char === "`") {
+      quote = char
+      output += char
+      index += 1
+      continue
+    }
+    const replacement = replacements.find(([from]) =>
+      code.startsWith(from, index)
+    )
+    if (replacement) {
+      output += replacement[1]
+      index += replacement[0].length
+      continue
+    }
+    output += char
+    index += 1
+  }
+  return output
+}
+
+const formatCompiledJs = (code: string) =>
+  replaceCodeSpans(code, [
+    [";\nexport ", ";\n\nexport "],
+    [" && ", "\n    && "],
+    [" || ", "\n    || "],
+    [" ? ", "\n  ? "],
+    [" : ", "\n  : "],
+  ]).replace(/\n{3,}/g, "\n\n")
+
 const transformSource = async (options: TransformOptions) => {
   await swcReady
   const result = await transform(
@@ -419,7 +466,7 @@ const transformSource = async (options: TransformOptions) => {
       module: { type: options.moduleType },
     },
   )
-  return result.code
+  return formatCompiledJs(result.code)
 }
 
 const compileSource = async (code: string) => {
