@@ -65,6 +65,23 @@ impl VisitMut for TsPatternTransformer {
             }
         }
     }
+
+    fn visit_mut_arrow_expr(&mut self, arrow: &mut ArrowExpr) {
+        if let BlockStmtOrExpr::Expr(expr) = &*arrow.body {
+            if let Some(chain) = self.parse_match_chain(expr) {
+                if chain.arms.iter().all(is_switchable_arm) {
+                    arrow.body = Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                        span: DUMMY_SP,
+                        ctxt: Default::default(),
+                        stmts: self.compile_switch_stmts(chain),
+                    }));
+                    return;
+                }
+            }
+        }
+
+        arrow.visit_mut_children_with(self);
+    }
 }
 
 impl TsPatternTransformer {
@@ -234,6 +251,10 @@ impl TsPatternTransformer {
     }
 
     fn compile_switch(&mut self, chain: MatchChain) -> Expr {
+        iife(self.compile_switch_stmts(chain))
+    }
+
+    fn compile_switch_stmts(&mut self, chain: MatchChain) -> Vec<Stmt> {
         let input_ident = private_ident!("_tsPatternInput");
         let input_expr = ident_expr(&input_ident);
         let mut cases = Vec::new();
@@ -265,14 +286,14 @@ impl TsPatternTransformer {
             cons: fallback_stmts(chain.fallback, input_expr, exhaustive_error_callee),
         });
 
-        iife(vec![
+        vec![
             const_stmt(input_ident.clone(), *chain.input),
             Stmt::Switch(SwitchStmt {
                 span: DUMMY_SP,
                 discriminant: Box::new(ident_expr(&input_ident)),
                 cases,
             }),
-        ])
+        ]
     }
 
     fn compile_if_chain(&mut self, chain: MatchChain) -> Option<Expr> {
@@ -1193,6 +1214,18 @@ const result = match(input).with("a", () => 1).with("b", () => 2).otherwise(() =
         assert!(output.contains("switch"), "{output}");
         assert!(output.contains("case \"a\""), "{output}");
         assert!(output.contains("default"), "{output}");
+    }
+
+    #[test]
+    fn emits_switch_block_for_arrow_body_literal_match() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+export const run = (command: "start" | "stop" | "pause" | "unknown") => match(command).with("start", () => "running").with("stop", "pause", () => "halted").otherwise(() => "ignored");"#,
+        );
+
+        assert!(output.contains("=>{"), "{output}");
+        assert!(output.contains("switch"), "{output}");
+        assert!(!output.contains("=> (()=>"), "{output}");
     }
 
     #[test]
