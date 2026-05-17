@@ -1,6 +1,30 @@
+/// <reference types="vite/client" />
+
 import "./app.css"
 import { signal } from "@preact/signals"
+import { useEffect, useRef } from "preact/hooks"
 import { match, P } from "ts-pattern"
+import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
+import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
+import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
+import * as tsRuntime from "monaco-editor/esm/vs/language/typescript/monaco.contribution"
+import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker"
+import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker"
+
+type MonacoTypeScript =
+  typeof import("monaco-editor/esm/vs/editor/editor.main").typescript
+
+const ts = tsRuntime as unknown as MonacoTypeScript
+const monacoGlobals = globalThis as typeof globalThis & {
+  MonacoEnvironment?: monaco.Environment
+}
+
+monacoGlobals.MonacoEnvironment = {
+  getWorker: (_workerId, label) =>
+    label === "typescript" || label === "javascript"
+      ? new TsWorker()
+      : new EditorWorker(),
+}
 
 const objectPatternSource = `import { match, P } from "ts-pattern"
 
@@ -96,6 +120,10 @@ export const run = (item: Item): string =>
 
 const DEFAULT_SOURCE = objectPatternSource
 const themeStorageKey = "ts-pattern-swc-playground-theme"
+const tsPatternTypes = import.meta.glob<string>(
+  "/node_modules/ts-pattern/dist/**/*.d.ts",
+  { eager: true, query: "?raw", import: "default" },
+)
 
 type ModuleType = "es6" | "commonjs"
 type TransformOptions = {
@@ -107,8 +135,18 @@ type Runnable = (input: unknown) => unknown
 type ModuleExports = { run: Runnable; inputs?: unknown[] }
 type BenchResult = { ms: number; checksum: number }
 type Theme = "white" | "dark"
-
 type PatternId = typeof commonPatterns[number]["id"] | "custom"
+
+type TypeScriptEditorProps = {
+  value: string
+  theme: Theme
+  onChange: (value: string) => void
+}
+
+type CodeViewerProps = {
+  value: string
+  theme: Theme
+}
 
 const getInitialTheme = (): Theme => {
   try {
@@ -120,46 +158,36 @@ const getInitialTheme = (): Theme => {
 
 const applyTheme = (value: Theme) => {
   document.documentElement.dataset.theme = value
+  monaco.editor.setTheme(value === "dark" ? "vs-dark" : "vs")
 }
 
-const escapeHtml = (value: string) =>
-  value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-
-const tokenClass = (token: string) =>
-  /^\/\//.test(token) || /^\/\*/.test(token)
-    ? "comment"
-    : /^[`"']/.test(token)
-    ? "string"
-    : /^\d/.test(token)
-    ? "number"
-    : /^(import|from|type|export|const|let|return|if|else|switch|case|default|with|otherwise|satisfies|true|false|null|undefined|new)$/
-        .test(
-          token,
-        )
-    ? "keyword"
-    : /^(string|number|boolean|unknown|void)$/.test(token)
-    ? "type"
-    : "punctuation"
-
-const highlight = (code: string) => {
-  const tokenPattern =
-    /\/\/.*|\/\*[\s\S]*?\*\/|`(?:\\[\s\S]|[^`\\])*`|"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\b(?:import|from|type|export|const|let|return|if|else|switch|case|default|with|otherwise|satisfies|true|false|null|undefined|new|string|number|boolean|unknown|void)\b|\b\d+(?:\.\d+)?\b|[{}()[\].,:?]/g
-  let cursor = 0
-  let html = ""
-  for (const match of code.matchAll(tokenPattern)) {
-    const token = match[0]
-    const index = match.index ?? 0
-    html += escapeHtml(code.slice(cursor, index))
-    html += `<span class="token ${tokenClass(token)}">${
-      escapeHtml(token)
-    }</span>`
-    cursor = index + token.length
+const configureTypeScript = () => {
+  ts.typescriptDefaults.setCompilerOptions({
+    allowNonTsExtensions: true,
+    esModuleInterop: true,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.NodeJs,
+    noEmit: true,
+    strict: true,
+    target: ts.ScriptTarget.ESNext,
+  })
+  ts.typescriptDefaults.setDiagnosticsOptions({
+    noSemanticValidation: false,
+    noSyntaxValidation: false,
+  })
+  for (const [path, content] of Object.entries(tsPatternTypes)) {
+    ts.typescriptDefaults.addExtraLib(
+      content,
+      `file:///node_modules/ts-pattern/dist/${path.split("/dist/")[1]}`,
+    )
   }
-  return `${html}${escapeHtml(code.slice(cursor))}`
+  ts.typescriptDefaults.addExtraLib(
+    'export * from "./dist/index"',
+    "file:///node_modules/ts-pattern/index.d.ts",
+  )
 }
+
+configureTypeScript()
 
 const source = signal(DEFAULT_SOURCE)
 const compiled = signal("")
@@ -265,7 +293,7 @@ const runBenchmark = async () => {
       ? baseline.inputs
       : defaultBenchmarkInputs
     for (const input of inputs) {
-      if (baseline.run?.(input) !== optimized.run?.(input)) {
+      if (baseline.run(input) !== optimized.run(input)) {
         throw new Error("Benchmark outputs differ")
       }
     }
@@ -288,19 +316,11 @@ const runBenchmark = async () => {
   }
 }
 
-const onInput = (event: Event) => {
-  source.value = (event.currentTarget as HTMLTextAreaElement).value
+const onEditorChange = (value: string) => {
+  source.value = value
   selectedPattern.value = "custom"
   benchmarkStatus.value = ""
-  void compileSource(source.value)
-}
-
-const onEditorScroll = (event: Event) => {
-  const textarea = event.currentTarget as HTMLTextAreaElement
-  const backdrop = textarea.previousElementSibling as HTMLElement | null
-  if (!backdrop) return
-  backdrop.scrollTop = textarea.scrollTop
-  backdrop.scrollLeft = textarea.scrollLeft
+  void compileSource(value)
 }
 
 const onIterationsInput = (event: Event) => {
@@ -328,6 +348,98 @@ const onPatternChange = (event: Event) => {
   source.value = pattern.source
   benchmarkStatus.value = ""
   void compileSource(pattern.source)
+}
+
+const TypeScriptEditor = (
+  { value, theme, onChange }: TypeScriptEditorProps,
+) => {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const onChangeRef = useRef(onChange)
+
+  onChangeRef.current = onChange
+
+  useEffect(() => {
+    if (!hostRef.current) return
+    const model = monaco.editor.createModel(
+      value,
+      "typescript",
+      monaco.Uri.parse("file:///playground.ts"),
+    )
+    const editor = monaco.editor.create(hostRef.current, {
+      automaticLayout: true,
+      fontSize: 14,
+      minimap: { enabled: false },
+      model,
+      scrollBeyondLastLine: false,
+      tabSize: 2,
+      theme: theme === "dark" ? "vs-dark" : "vs",
+    })
+    editorRef.current = editor
+    const subscription = editor.onDidChangeModelContent(() => {
+      onChangeRef.current(editor.getValue())
+    })
+    return () => {
+      subscription.dispose()
+      editor.dispose()
+      model.dispose()
+      editorRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || editor.getValue() === value) return
+    editor.setValue(value)
+  }, [value])
+
+  useEffect(() => {
+    monaco.editor.setTheme(theme === "dark" ? "vs-dark" : "vs")
+  }, [theme])
+
+  return <div class="monaco-host" ref={hostRef} />
+}
+
+const CodeViewer = ({ value, theme }: CodeViewerProps) => {
+  const hostRef = useRef<HTMLDivElement>(null)
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+
+  useEffect(() => {
+    if (!hostRef.current) return
+    const model = monaco.editor.createModel(
+      value,
+      "javascript",
+      monaco.Uri.parse("file:///compiled.js"),
+    )
+    const editor = monaco.editor.create(hostRef.current, {
+      automaticLayout: true,
+      fontSize: 14,
+      minimap: { enabled: false },
+      model,
+      readOnly: true,
+      scrollBeyondLastLine: false,
+      tabSize: 2,
+      theme: theme === "dark" ? "vs-dark" : "vs",
+    })
+    editorRef.current = editor
+    return () => {
+      editor.dispose()
+      model.dispose()
+      editorRef.current = null
+    }
+  }, [])
+
+  useEffect(() => {
+    const editor = editorRef.current
+    if (!editor || editor.getValue() === value) return
+    editor.setValue(value)
+  }, [value])
+
+  useEffect(() => {
+    monaco.editor.setTheme(theme === "dark" ? "vs-dark" : "vs")
+  }, [theme])
+
+  return <div class="monaco-host" ref={hostRef} />
 }
 
 void compileSource(DEFAULT_SOURCE)
@@ -358,26 +470,17 @@ export const App = () => (
     <section class="panes">
       <label class="pane">
         <span>TypeScript</span>
-        <div class="code-editor">
-          <pre
-            aria-hidden="true"
-            dangerouslySetInnerHTML={{ __html: `${highlight(source.value)}\n` }}
-          />
-          <textarea
-            value={source.value}
-            onInput={onInput}
-            onScroll={onEditorScroll}
-            spellcheck={false}
-          />
-        </div>
+        <TypeScriptEditor
+          value={source.value}
+          theme={theme.value}
+          onChange={onEditorChange}
+        />
       </label>
       <label class="pane">
         <span>Compiled JS</span>
-        <pre
-          class="code-output"
-          dangerouslySetInnerHTML={{
-            __html: highlight(status.value || compiled.value),
-          }}
+        <CodeViewer
+          value={status.value || compiled.value}
+          theme={theme.value}
         />
       </label>
     </section>

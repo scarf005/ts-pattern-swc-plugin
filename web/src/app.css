@@ -41,21 +41,14 @@ h1 {
   min-height: 0;
 }
 
-.code-editor {
-  position: relative;
+.monaco-host {
   min-height: 0;
+  border: 1px solid var(--border);
+  overflow: hidden;
 }
 
-.code-editor pre,
-.code-editor textarea {
-  position: absolute;
-  inset: 0;
-}
-
-textarea,
 pre {
   margin: 0;
-  min-height: 0;
   padding: 0.75rem;
   border: 1px solid var(--border);
   box-sizing: border-box;
@@ -63,24 +56,6 @@ pre {
   background: var(--panel);
   color: var(--fg);
   font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  tab-size: 2;
-  white-space: pre;
-}
-
-.code-editor pre {
-  pointer-events: none;
-}
-
-textarea {
-  resize: none;
-  background: transparent;
-  color: transparent;
-  caret-color: var(--fg);
-}
-
-textarea::selection {
-  background: var(--selection);
-  color: transparent;
 }
 
 button,
@@ -101,30 +76,6 @@ button {
   white-space: pre-wrap;
 }
 
-.token.keyword {
-  color: var(--syntax-keyword);
-}
-
-.token.string {
-  color: var(--syntax-string);
-}
-
-.token.number {
-  color: var(--syntax-number);
-}
-
-.token.comment {
-  color: var(--syntax-comment);
-}
-
-.token.type {
-  color: var(--syntax-type);
-}
-
-.token.punctuation {
-  color: var(--syntax-punctuation);
-}
-
 @media (max-width: 800px) {
   main {
     height: auto;
@@ -138,8 +89,7 @@ button {
     grid-template-columns: 1fr;
   }
 
-  .code-editor,
-  .code-output {
+  .monaco-host {
     min-height: 24rem;
   }
 }
