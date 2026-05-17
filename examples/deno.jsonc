@@ -1,0 +1,16 @@
+{
+  "fmt": {
+    "semiColons": false,
+    "proseWrap": "never"
+  },
+  "tasks": {
+    "check": "deno check ./*.ts"
+  },
+  "nodeModulesDir": "auto",
+  "compilerOptions": {
+    "strict": true
+  },
+  "imports": {
+    "ts-pattern": "npm:ts-pattern@^5.9.0"
+  }
+}
