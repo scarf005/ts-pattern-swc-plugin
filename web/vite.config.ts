@@ -67,6 +67,7 @@ const playgroundAssets = (): Plugin => ({
   },
 })
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
+  base: command === "build" ? "/ts-pattern-swc-plugin/" : "/",
   plugins: [deno(), preact(), playgroundAssets()],
-})
+}))
