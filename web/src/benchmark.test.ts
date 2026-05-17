@@ -6,6 +6,9 @@ import {
   benchmarkModules,
   benchmarkOrder,
   type BenchResult,
+  formatBenchmarkComparison,
+  getBenchmarkSink,
+  measure,
 } from "./benchmark.ts"
 
 Deno.test("benchmarkOrder alternates execution order", () => {
@@ -26,6 +29,18 @@ Deno.test("benchmarkInputsEqual compares formatted values", () => {
   assertEquals(benchmarkInputsEqual([1], [2]), false)
 })
 
+Deno.test("measure times run(input) without formatting results", () => {
+  const result = {
+    toString: () => {
+      throw new Error("should not format")
+    },
+  }
+  const bench = measure(() => result, [1], 3)
+
+  assertEquals(typeof bench.ms, "number")
+  assertEquals(getBenchmarkSink(), result)
+})
+
 Deno.test("benchmarkModules reports identical generated code", () => {
   const run = (input: unknown) => input
   const result = benchmarkModules({
@@ -40,6 +55,29 @@ Deno.test("benchmarkModules reports identical generated code", () => {
   })
 })
 
+Deno.test("formatBenchmarkComparison labels samples and iterations", () => {
+  assertEquals(
+    formatBenchmarkComparison({
+      identicalCode: false,
+      baseline: { ms: 94 },
+      optimized: { ms: 2 },
+      speedup: 47,
+      sampleCount: 7,
+    }, {
+      count: 100000,
+      inputCount: 3,
+      runtimeLabel: "browser benchmark",
+    }),
+    [
+      "browser benchmark: 7 samples × 100000 iterations/sample",
+      "inputs: 3 values, cycled during each sample",
+      "ts-pattern: 94.00 ms/sample (0.940 µs/iteration)",
+      "compiled: 2.00 ms/sample (0.020 µs/iteration)",
+      "ts-pattern SWC plugin: 47.00x faster than ts-pattern",
+    ].join("\n"),
+  )
+})
+
 Deno.test("benchmarkModules uses alternating samples and median", () => {
   const baselineRun = (input: unknown) => input
   const optimizedRun = (input: unknown) => input
@@ -51,7 +89,7 @@ Deno.test("benchmarkModules uses alternating samples and median", () => {
   const measureFn = (run: typeof baselineRun): BenchResult => {
     const key = run === baselineRun ? "baseline" : "optimized"
     calls.push(key)
-    return { ms: times[key].shift() ?? 0, checksum: 1 }
+    return { ms: times[key].shift() ?? 0 }
   }
 
   const result = benchmarkModules({
@@ -77,8 +115,8 @@ Deno.test("benchmarkModules uses alternating samples and median", () => {
   ])
   assertEquals(result, {
     identicalCode: false,
-    baseline: { ms: 20, checksum: 1 },
-    optimized: { ms: 15, checksum: 1 },
+    baseline: { ms: 20 },
+    optimized: { ms: 15 },
     speedup: 20 / 15,
     sampleCount: 3,
   })

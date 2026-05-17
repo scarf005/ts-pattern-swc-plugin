@@ -23,7 +23,13 @@ h1 {
   font-size: 1rem;
 }
 
-.controls input {
+.control-field {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.control-field input {
   width: 8rem;
 }
 

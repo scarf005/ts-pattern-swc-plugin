@@ -4,7 +4,11 @@ import "./app.css"
 import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
-import { benchmarkInputsEqual, benchmarkModules } from "./benchmark.ts"
+import {
+  benchmarkInputsEqual,
+  benchmarkModules,
+  formatBenchmarkComparison,
+} from "./benchmark.ts"
 import { type ModuleType, transformInBrowser } from "./browser-transform.ts"
 import { cycleValue, getWheelStep } from "./example-wheel.ts"
 import { formatValue, getModule } from "./runtime.ts"
@@ -341,15 +345,11 @@ const runBenchmark = async () => {
       count,
     })
 
-    benchmarkStatus.value = result.identicalCode ? result.note : [
-      `ts-pattern (median of ${result.sampleCount}): ${
-        result.baseline.ms.toFixed(2)
-      } ms`,
-      `compiled (median of ${result.sampleCount}): ${
-        result.optimized.ms.toFixed(2)
-      } ms`,
-      `ts-pattern SWC plugin: ${result.speedup.toFixed(2)}x faster than ts-pattern`,
-    ].join("\n")
+    benchmarkStatus.value = formatBenchmarkComparison(result, {
+      count,
+      inputCount: baselineInputs.length,
+      runtimeLabel: "browser benchmark",
+    })
   } catch (error) {
     benchmarkStatus.value = error instanceof Error
       ? error.message
@@ -517,20 +517,25 @@ export const App = () => (
           onChange={onPatternChange}
           onWheel={onPatternWheel}
         >
+          {selectedPattern.value === "custom" && (
+            <option value="custom" hidden>Custom</option>
+          )}
           {commonPatterns.map((pattern) => (
             <option key={pattern.id} value={pattern.id}>{pattern.label}</option>
           ))}
-          <option value="custom">Custom</option>
         </select>
         <select value={theme.value} onChange={onThemeChange}>
           <option value="white">White</option>
           <option value="dark">Dark</option>
         </select>
-        <input
-          value={iterations.value}
-          onInput={onIterationsInput}
-          inputMode="numeric"
-        />
+        <label class="control-field">
+          <span>Iterations/sample</span>
+          <input
+            value={iterations.value}
+            onInput={onIterationsInput}
+            inputMode="numeric"
+          />
+        </label>
         <button type="button" onClick={runCurrent}>Run</button>
         <button type="button" onClick={runBenchmark}>Benchmark</button>
       </div>

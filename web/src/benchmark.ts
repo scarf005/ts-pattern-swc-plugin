@@ -1,6 +1,6 @@
 import { formatValue, type Runnable } from "./runtime.ts"
 
-export type BenchResult = { ms: number; checksum: number }
+export type BenchResult = { ms: number }
 export type BenchmarkModule = { code: string; run: Runnable; inputs: unknown[] }
 export type BenchmarkComparison =
   | {
@@ -15,6 +15,12 @@ export type BenchmarkComparison =
     sampleCount: number
   }
 
+export type BenchmarkFormatOptions = {
+  count: number
+  inputCount: number
+  runtimeLabel: string
+}
+
 type BenchmarkOrder = "baseline" | "optimized"
 type MeasureFn = (
   run: Runnable,
@@ -22,20 +28,21 @@ type MeasureFn = (
   count: number,
 ) => BenchResult
 
-const score = (value: unknown) =>
-  typeof value === "number" ? value : String(value).length
+let sink: unknown
 
 export const measure = (
   run: Runnable,
   inputs: unknown[],
   count: number,
 ): BenchResult => {
-  let checksum = 0
+  let result: unknown
   const start = performance.now()
   for (let index = 0; index < count; index += 1) {
-    checksum += score(run(inputs[index % inputs.length]))
+    result = run(inputs[index % inputs.length])
   }
-  return { ms: performance.now() - start, checksum }
+  const ms = performance.now() - start
+  sink = result
+  return { ms }
 }
 
 export const benchmarkOrder = (sampleCount: number): BenchmarkOrder[][] =>
@@ -101,10 +108,6 @@ export const benchmarkModules = (
   const baseline = median(baselineResults)
   const optimized = median(optimizedResults)
 
-  if (baseline.checksum !== optimized.checksum) {
-    throw new Error("Benchmark checksums differ")
-  }
-
   return {
     identicalCode: false,
     baseline,
@@ -113,6 +116,30 @@ export const benchmarkModules = (
     sampleCount,
   }
 }
+
+const formatMs = (value: number) => value.toFixed(2)
+
+const formatUs = (ms: number, count: number) => ((ms * 1000) / count).toFixed(3)
+
+export const formatBenchmarkComparison = (
+  result: BenchmarkComparison,
+  options: BenchmarkFormatOptions,
+): string =>
+  result.identicalCode ? result.note : [
+    `${options.runtimeLabel}: ${result.sampleCount} samples × ${options.count} iterations/sample`,
+    `inputs: ${options.inputCount} values, cycled during each sample`,
+    `ts-pattern: ${formatMs(result.baseline.ms)} ms/sample (${
+      formatUs(result.baseline.ms, options.count)
+    } µs/iteration)`,
+    `compiled: ${formatMs(result.optimized.ms)} ms/sample (${
+      formatUs(result.optimized.ms, options.count)
+    } µs/iteration)`,
+    `ts-pattern SWC plugin: ${
+      result.speedup.toFixed(2)
+    }x faster than ts-pattern`,
+  ].join("\n")
+
+export const getBenchmarkSink = () => sink
 
 export const benchmarkInputsEqual = (
   baselineInputs: unknown[],

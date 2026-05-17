@@ -65,38 +65,29 @@ const loadExample = async (name: string): Promise<BenchExample> => {
   }
 }
 
-const hashString = (value: string) => {
-  let hash = 0
-  for (let index = 0; index < value.length; index += 1) {
-    hash = Math.imul(hash ^ value.charCodeAt(index), 16777619)
+const createRunner = (module: Required<ModuleExports>) => {
+  let index = 0
+  return () => {
+    const input = module.inputs[index]
+    index = (index + 1) % module.inputs.length
+    return module.run(input)
   }
-  return hash >>> 0
-}
-
-const score = (value: unknown) =>
-  typeof value === "number" && Number.isFinite(value)
-    ? value | 0
-    : hashString(formatValue(value))
-
-const runAll = (module: Required<ModuleExports>) => {
-  let checksum = 0
-  for (const input of module.inputs) {
-    checksum = (checksum + score(module.run(input))) | 0
-  }
-  return checksum
 }
 
 await Deno.stat(pluginPath)
 const examples = await Promise.all((await getExampleNames()).map(loadExample))
 
-let sink = 0
+let sink: unknown
 
 for (const example of examples) {
+  const runBaseline = createRunner(example.baseline)
+  const runOptimized = createRunner(example.optimized)
+
   Deno.bench({
     name: "ts-pattern runtime",
     group: example.id,
   }, () => {
-    sink ^= runAll(example.baseline)
+    sink = runBaseline()
   })
 
   Deno.bench({
@@ -104,10 +95,10 @@ for (const example of examples) {
     group: example.id,
     baseline: true,
   }, () => {
-    sink ^= runAll(example.optimized)
+    sink = runOptimized()
   })
 }
 
 addEventListener("unload", () => {
-  if (sink === Number.NaN) console.error(sink)
+  if (Object.is(sink, globalThis)) console.error(sink)
 })
