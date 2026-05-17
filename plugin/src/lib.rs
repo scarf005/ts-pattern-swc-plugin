@@ -829,7 +829,164 @@ fn handler_result(handler: Box<Expr>, input_expr: Expr) -> Expr {
                 input_expr,
             ),
         },
+        Expr::Arrow(ArrowExpr {
+            params,
+            body,
+            is_async: false,
+            is_generator: false,
+            ..
+        }) if params.len() == 1 => match *body {
+            BlockStmtOrExpr::Expr(expr) => {
+                if let Some(inlined) =
+                    inline_simple_handler_body(&params[0], input_expr.clone(), *expr.clone())
+                {
+                    return inlined;
+                }
+
+                call_handler(
+                    Box::new(Expr::Arrow(ArrowExpr {
+                        span: DUMMY_SP,
+                        ctxt: Default::default(),
+                        params,
+                        body: Box::new(BlockStmtOrExpr::Expr(expr)),
+                        is_async: false,
+                        is_generator: false,
+                        type_params: None,
+                        return_type: None,
+                    })),
+                    input_expr,
+                )
+            }
+            BlockStmtOrExpr::BlockStmt(block) => call_handler(
+                Box::new(Expr::Arrow(ArrowExpr {
+                    span: DUMMY_SP,
+                    ctxt: Default::default(),
+                    params,
+                    body: Box::new(BlockStmtOrExpr::BlockStmt(block)),
+                    is_async: false,
+                    is_generator: false,
+                    type_params: None,
+                    return_type: None,
+                })),
+                input_expr,
+            ),
+        },
         handler => call_handler(Box::new(handler), input_expr),
+    }
+}
+
+fn inline_simple_handler_body(param: &Pat, input_expr: Expr, mut body: Expr) -> Option<Expr> {
+    let mut bindings = Vec::new();
+    collect_pat_bindings(param, input_expr, &mut bindings)?;
+    if !is_simple_inline_body(&body, &bindings) {
+        return None;
+    }
+    body.visit_mut_with(&mut InlineBindings { bindings });
+    Some(body)
+}
+
+fn collect_pat_bindings(param: &Pat, value: Expr, bindings: &mut Vec<(Id, Expr)>) -> Option<()> {
+    match param {
+        Pat::Ident(ident) => {
+            bindings.push((ident.id.to_id(), value));
+            Some(())
+        }
+        Pat::Object(object) => object.props.iter().try_for_each(|prop| match prop {
+            ObjectPatProp::Assign(assign) if assign.value.is_none() => {
+                bindings.push((
+                    assign.key.id.to_id(),
+                    member_expr(value.clone(), assign.key.id.sym.as_ref()),
+                ));
+                Some(())
+            }
+            ObjectPatProp::KeyValue(key_value) => collect_pat_bindings(
+                &key_value.value,
+                prop_access(value.clone(), &key_value.key)?,
+                bindings,
+            ),
+            ObjectPatProp::Assign(_) | ObjectPatProp::Rest(_) => None,
+        }),
+        Pat::Array(array) => array
+            .elems
+            .iter()
+            .enumerate()
+            .try_for_each(|(index, elem)| {
+                if let Some(elem) = elem {
+                    collect_pat_bindings(
+                        elem,
+                        computed_member_expr(
+                            value.clone(),
+                            Expr::Lit(Lit::Num(Number {
+                                span: DUMMY_SP,
+                                value: index as f64,
+                                raw: None,
+                            })),
+                        ),
+                        bindings,
+                    )
+                } else {
+                    Some(())
+                }
+            }),
+        Pat::Assign(_) | Pat::Rest(_) | Pat::Invalid(_) | Pat::Expr(_) => None,
+    }
+}
+
+fn is_simple_inline_body(body: &Expr, bindings: &[(Id, Expr)]) -> bool {
+    let mut usage = BindingUsage {
+        bindings: bindings.iter().map(|(id, _)| id.clone()).collect(),
+        counts: vec![0; bindings.len()],
+        has_mutation: false,
+    };
+    let mut body = body.clone();
+    body.visit_mut_with(&mut usage);
+    !usage.has_mutation && usage.counts.iter().all(|count| *count == 1)
+}
+
+struct BindingUsage {
+    bindings: Vec<Id>,
+    counts: Vec<usize>,
+    has_mutation: bool,
+}
+
+impl VisitMut for BindingUsage {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        match expr {
+            Expr::Ident(ident) => {
+                if let Some(index) = self.bindings.iter().position(|id| *id == ident.to_id()) {
+                    self.counts[index] += 1;
+                }
+            }
+            Expr::Assign(_) | Expr::Update(_) => {
+                self.has_mutation = true;
+            }
+            Expr::Arrow(_) | Expr::Fn(_) | Expr::Class(_) => return,
+            _ => {}
+        }
+
+        expr.visit_mut_children_with(self);
+    }
+}
+
+struct InlineBindings {
+    bindings: Vec<(Id, Expr)>,
+}
+
+impl VisitMut for InlineBindings {
+    fn visit_mut_expr(&mut self, expr: &mut Expr) {
+        if let Expr::Ident(ident) = expr {
+            if let Some((_, replacement)) =
+                self.bindings.iter().find(|(id, _)| *id == ident.to_id())
+            {
+                *expr = replacement.clone();
+                return;
+            }
+        }
+
+        match expr {
+            Expr::Arrow(_) | Expr::Fn(_) | Expr::Class(_) => {}
+            _ => expr.visit_mut_children_with(self),
+        }
     }
 }
 
@@ -1062,6 +1219,17 @@ const result = match(value).with(P.union(P.string, P.number), () => "scalar").wi
         assert!(!output.contains("(() => \"scalar\")("), "{output}");
         assert!(output.contains("typeof value === \"string\""), "{output}");
         assert!(output.contains("? \"scalar\""), "{output}");
+    }
+
+    #[test]
+    fn inlines_simple_destructured_handler() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with({ type: "ok", value: P.number }, ({ value }) => `ok:${value}`).otherwise(() => "idle");"#,
+        );
+
+        assert!(output.contains("`ok:${input.value}`"), "{output}");
+        assert!(!output.contains("=> `ok:"), "{output}");
     }
 
     #[test]
