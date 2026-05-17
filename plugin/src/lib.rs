@@ -656,8 +656,31 @@ fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> 
     };
 
     match &arm.guard {
-        Some(guard) => Some(and(pattern_test, call_expr((**guard).clone(), vec![input]))),
+        Some(guard) => Some(and(pattern_test, guard_result(guard, input))),
         None => Some(pattern_test),
+    }
+}
+
+fn guard_result(guard: &Expr, input_expr: Expr) -> Expr {
+    match guard {
+        Expr::Arrow(ArrowExpr {
+            params,
+            body,
+            is_async: false,
+            is_generator: false,
+            ..
+        }) if params.len() == 1 => {
+            if let BlockStmtOrExpr::Expr(expr) = &**body {
+                if let Some(inlined) =
+                    inline_simple_lambda_body(&params[0], input_expr.clone(), (**expr).clone())
+                {
+                    return inlined;
+                }
+            }
+
+            call_expr(guard.clone(), vec![input_expr])
+        }
+        _ => call_expr(guard.clone(), vec![input_expr]),
     }
 }
 
@@ -896,7 +919,11 @@ fn handler_result(handler: Box<Expr>, input_expr: Expr) -> Expr {
     }
 }
 
-fn inline_simple_handler_body(param: &Pat, input_expr: Expr, mut body: Expr) -> Option<Expr> {
+fn inline_simple_handler_body(param: &Pat, input_expr: Expr, body: Expr) -> Option<Expr> {
+    inline_simple_lambda_body(param, input_expr, body)
+}
+
+fn inline_simple_lambda_body(param: &Pat, input_expr: Expr, mut body: Expr) -> Option<Expr> {
     let mut bindings = Vec::new();
     collect_pat_bindings(param, input_expr, &mut bindings)?;
     if !is_simple_inline_body(&body, &bindings) {
@@ -1252,6 +1279,17 @@ const result = match(value).with(P.union(P.string, P.number), () => "scalar").wi
         assert!(!output.contains("(() => \"scalar\")("), "{output}");
         assert!(output.contains("typeof value === \"string\""), "{output}");
         assert!(output.contains("? \"scalar\""), "{output}");
+    }
+
+    #[test]
+    fn inlines_simple_destructured_guard() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(item).with({ count: P.number }, ({ count }) => count > 5, () => "many").with({ count: P.number }, () => "some").otherwise(() => "none");"#,
+        );
+
+        assert!(output.contains("item.count > 5"), "{output}");
+        assert!(!output.contains("count })=>count > 5)(item)"), "{output}");
     }
 
     #[test]
