@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use swc_core::{
     common::DUMMY_SP,
@@ -23,6 +23,7 @@ struct TsPatternTransformer {
     match_imports: HashSet<Id>,
     p_imports: HashSet<Id>,
     namespaces: HashSet<Id>,
+    const_bindings: HashMap<Id, Expr>,
     non_exhaustive_error: Option<Expr>,
     needs_non_exhaustive_error_import: bool,
 }
@@ -56,6 +57,7 @@ struct SelectionBinding {
 impl VisitMut for TsPatternTransformer {
     fn visit_mut_module(&mut self, module: &mut Module) {
         self.collect_imports(module);
+        self.collect_const_bindings(module);
         module.visit_mut_children_with(self);
         if self.needs_non_exhaustive_error_import {
             add_non_exhaustive_error_import(module);
@@ -114,7 +116,7 @@ impl TsPatternTransformer {
                             "match" => {
                                 self.match_imports.insert(named.local.to_id());
                             }
-                            "P" => {
+                            "P" | "Pattern" => {
                                 self.p_imports.insert(named.local.to_id());
                             }
                             "NonExhaustiveError" => {
@@ -135,6 +137,55 @@ impl TsPatternTransformer {
                 }
             }
         }
+    }
+
+    fn collect_const_bindings(&mut self, module: &Module) {
+        let mut push_binding = |name: &Pat, init: &Option<Box<Expr>>| {
+            let Pat::Ident(ident) = name else {
+                return;
+            };
+            let Some(init) = init else {
+                return;
+            };
+            self.const_bindings
+                .insert(ident.id.to_id(), (**init).clone());
+        };
+
+        for item in &module.body {
+            match item {
+                ModuleItem::Stmt(Stmt::Decl(Decl::Var(var))) if var.kind == VarDeclKind::Const => {
+                    for decl in &var.decls {
+                        push_binding(&decl.name, &decl.init);
+                    }
+                }
+                ModuleItem::ModuleDecl(ModuleDecl::ExportDecl(ExportDecl {
+                    decl: Decl::Var(var),
+                    ..
+                })) if var.kind == VarDeclKind::Const => {
+                    for decl in &var.decls {
+                        push_binding(&decl.name, &decl.init);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn resolve_pattern_expr<'a>(&'a self, expr: &'a Expr) -> &'a Expr {
+        let mut current = expr;
+        for _ in 0..16 {
+            current = match current {
+                Expr::TsConstAssertion(assertion) => &assertion.expr,
+                Expr::TsAs(assertion) => &assertion.expr,
+                Expr::TsSatisfies(assertion) => &assertion.expr,
+                Expr::Ident(ident) => match self.const_bindings.get(&ident.to_id()) {
+                    Some(next) => next,
+                    None => return current,
+                },
+                _ => return current,
+            };
+        }
+        current
     }
 
     fn parse_match_chain(&self, expr: &Expr) -> Option<MatchChain> {
@@ -209,6 +260,7 @@ impl TsPatternTransformer {
     }
 
     fn is_p_member(&self, expr: &Expr, name: &str) -> bool {
+        let expr = self.resolve_pattern_expr(expr);
         let Expr::Member(member) = expr else {
             return false;
         };
@@ -224,8 +276,8 @@ impl TsPatternTransformer {
         }
     }
 
-    fn is_p_call<'a>(&self, expr: &'a Expr, name: &str) -> Option<&'a CallExpr> {
-        let call = as_call(expr)?;
+    fn is_p_call<'a>(&'a self, expr: &'a Expr, name: &str) -> Option<&'a CallExpr> {
+        let call = as_call(self.resolve_pattern_expr(expr))?;
         let Callee::Expr(callee) = &call.callee else {
             return None;
         };
@@ -235,6 +287,46 @@ impl TsPatternTransformer {
         } else {
             None
         }
+    }
+
+    fn is_p_chain_call<'a>(
+        &'a self,
+        expr: &'a Expr,
+        base: &str,
+        method: &str,
+    ) -> Option<&'a CallExpr> {
+        let call = as_call(self.resolve_pattern_expr(expr))?;
+        let Callee::Expr(callee) = &call.callee else {
+            return None;
+        };
+        let Expr::Member(member) = &**callee else {
+            return None;
+        };
+        if member_name(member) != Some(method) {
+            return None;
+        }
+        self.is_p_member(&member.obj, base).then_some(call)
+    }
+
+    fn select_call<'a>(&'a self, expr: &'a Expr) -> Option<(&'a CallExpr, Option<&'a Expr>)> {
+        let call = as_call(self.resolve_pattern_expr(expr))?;
+        let Callee::Expr(callee) = &call.callee else {
+            return None;
+        };
+        let Expr::Member(member) = &**callee else {
+            return None;
+        };
+        if member_name(member) != Some("select") {
+            return None;
+        }
+
+        if matches!(&*member.obj, Expr::Ident(_) | Expr::Member(_))
+            && self.is_p_member(callee, "select")
+        {
+            return Some((call, None));
+        }
+
+        Some((call, Some(&member.obj)))
     }
 
     fn is_namespace_member(&self, member: &MemberExpr, name: &str) -> bool {
@@ -462,13 +554,22 @@ impl TsPatternTransformer {
         pattern: &Expr,
         selections: &mut Vec<SelectionBinding>,
     ) -> Option<Expr> {
-        if let Some(call) = self.is_p_call(pattern, "select") {
-            return match call.args.as_slice() {
-                [] => {
+        let pattern = self.resolve_pattern_expr(pattern);
+
+        if let Some((call, base)) = self.select_call(pattern) {
+            return match (base, call.args.as_slice()) {
+                (None, []) => {
                     selections.push(SelectionBinding { name: None, value });
                     Some(bool_lit(true))
                 }
-                [arg] => {
+                (Some(base), []) => {
+                    selections.push(SelectionBinding {
+                        name: None,
+                        value: value.clone(),
+                    });
+                    self.pattern_test_with_selections(value, base, selections)
+                }
+                (None, [arg]) => {
                     if let Some(name) = selection_name(&arg.expr) {
                         selections.push(SelectionBinding {
                             name: Some(name),
@@ -483,7 +584,18 @@ impl TsPatternTransformer {
                         self.pattern_test_with_selections(value, &arg.expr, selections)
                     }
                 }
-                [name, inner] => {
+                (Some(base), [arg]) => {
+                    if let Some(name) = selection_name(&arg.expr) {
+                        selections.push(SelectionBinding {
+                            name: Some(name),
+                            value: value.clone(),
+                        });
+                        self.pattern_test_with_selections(value, base, selections)
+                    } else {
+                        None
+                    }
+                }
+                (None, [name, inner]) => {
                     selections.push(SelectionBinding {
                         name: Some(selection_name(&name.expr)?),
                         value: value.clone(),
@@ -613,6 +725,377 @@ impl TsPatternTransformer {
                         type_params: None,
                         return_type: None,
                     })],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_call(pattern, "set") {
+            if call.args.len() > 1 {
+                return None;
+            }
+
+            let set_test = instance_of(value.clone(), "Set");
+            if call.args.is_empty() {
+                return Some(set_test);
+            }
+
+            let item_ident = private_ident!("_tsPatternItem");
+            let mut item_selections = Vec::new();
+            let item_test = self.pattern_test_with_selections(
+                ident_expr(&item_ident),
+                &call.args[0].expr,
+                &mut item_selections,
+            )?;
+            if !item_selections.is_empty() {
+                return None;
+            }
+            return Some(and(
+                set_test,
+                call_member(
+                    member_expr(array_from(value), "every"),
+                    vec![Expr::Arrow(ArrowExpr {
+                        span: DUMMY_SP,
+                        ctxt: Default::default(),
+                        params: vec![Pat::Ident(item_ident.into())],
+                        body: Box::new(BlockStmtOrExpr::Expr(Box::new(item_test))),
+                        is_async: false,
+                        is_generator: false,
+                        type_params: None,
+                        return_type: None,
+                    })],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_call(pattern, "map") {
+            if call.args.len() > 2 {
+                return None;
+            }
+
+            let map_test = instance_of(value.clone(), "Map");
+            if call.args.is_empty() {
+                return Some(map_test);
+            }
+            if call.args.len() != 2 {
+                return None;
+            }
+
+            let key_ident = private_ident!("_tsPatternKey");
+            let value_ident = private_ident!("_tsPatternValue");
+            let mut key_selections = Vec::new();
+            let key_test = self.pattern_test_with_selections(
+                ident_expr(&key_ident),
+                &call.args[0].expr,
+                &mut key_selections,
+            )?;
+            if !key_selections.is_empty() {
+                return None;
+            }
+            let mut value_selections = Vec::new();
+            let value_test = self.pattern_test_with_selections(
+                ident_expr(&value_ident),
+                &call.args[1].expr,
+                &mut value_selections,
+            )?;
+            if !value_selections.is_empty() {
+                return None;
+            }
+            return Some(and(
+                map_test,
+                call_member(
+                    member_expr(
+                        array_from(call_member(member_expr(value, "entries"), vec![])),
+                        "every",
+                    ),
+                    vec![Expr::Arrow(ArrowExpr {
+                        span: DUMMY_SP,
+                        ctxt: Default::default(),
+                        params: vec![Pat::Array(ArrayPat {
+                            span: DUMMY_SP,
+                            elems: vec![
+                                Some(Pat::Ident(key_ident.into())),
+                                Some(Pat::Ident(value_ident.into())),
+                            ],
+                            optional: false,
+                            type_ann: None,
+                        })],
+                        body: Box::new(BlockStmtOrExpr::Expr(Box::new(and(key_test, value_test)))),
+                        is_async: false,
+                        is_generator: false,
+                        type_params: None,
+                        return_type: None,
+                    })],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_call(pattern, "record") {
+            if call.args.is_empty() || call.args.len() > 2 {
+                return None;
+            }
+
+            let key_ident = private_ident!("_tsPatternKey");
+            let value_ident = private_ident!("_tsPatternValue");
+            let key_pattern = (call.args.len() == 2).then_some(&call.args[0].expr);
+            let value_pattern = &call.args[call.args.len() - 1].expr;
+            let mut key_selections = Vec::new();
+            let key_test = if let Some(key_pattern) = key_pattern {
+                self.pattern_test_with_selections(
+                    ident_expr(&key_ident),
+                    key_pattern,
+                    &mut key_selections,
+                )?
+            } else {
+                bool_lit(true)
+            };
+            let mut value_selections = Vec::new();
+            let value_test = self.pattern_test_with_selections(
+                ident_expr(&value_ident),
+                value_pattern,
+                &mut value_selections,
+            )?;
+            selections.extend(record_aggregate_selections(
+                value.clone(),
+                &key_ident,
+                key_selections,
+                &value_ident,
+                value_selections,
+            )?);
+            return Some(and(
+                and(
+                    and(
+                        strict_ne(value.clone(), null_lit()),
+                        typeof_eq(value.clone(), "object"),
+                    ),
+                    unary(UnaryOp::Bang, array_is_array(value.clone())),
+                ),
+                call_member(
+                    member_expr(object_entries(value), "every"),
+                    vec![Expr::Arrow(ArrowExpr {
+                        span: DUMMY_SP,
+                        ctxt: Default::default(),
+                        params: vec![Pat::Array(ArrayPat {
+                            span: DUMMY_SP,
+                            elems: vec![
+                                Some(Pat::Ident(key_ident.into())),
+                                Some(Pat::Ident(value_ident.into())),
+                            ],
+                            optional: false,
+                            type_ann: None,
+                        })],
+                        body: Box::new(BlockStmtOrExpr::Expr(Box::new(and(key_test, value_test)))),
+                        is_async: false,
+                        is_generator: false,
+                        type_params: None,
+                        return_type: None,
+                    })],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_call(pattern, "intersection") {
+            if call.args.is_empty() {
+                return None;
+            }
+
+            return call
+                .args
+                .iter()
+                .map(|arg| {
+                    let mut inner_selections = Vec::new();
+                    let test = self.pattern_test_with_selections(
+                        value.clone(),
+                        &arg.expr,
+                        &mut inner_selections,
+                    )?;
+                    if !inner_selections.is_empty() {
+                        return None;
+                    }
+                    Some(test)
+                })
+                .try_fold(None, |acc, test| {
+                    let test = test?;
+                    Some(Some(match acc {
+                        Some(acc) => and(acc, test),
+                        None => test,
+                    }))
+                })?;
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "startsWith") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                call_member(
+                    member_expr(value, "startsWith"),
+                    vec![(*call.args[0].expr).clone()],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "endsWith") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                call_member(
+                    member_expr(value, "endsWith"),
+                    vec![(*call.args[0].expr).clone()],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "includes") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                call_member(
+                    member_expr(value, "includes"),
+                    vec![(*call.args[0].expr).clone()],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "regex") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                call_member(
+                    member_expr((*call.args[0].expr).clone(), "test"),
+                    vec![value],
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "minLength") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                bin(
+                    BinaryOp::GtEq,
+                    member_expr(value, "length"),
+                    (*call.args[0].expr).clone(),
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "length") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                strict_eq(member_expr(value, "length"), (*call.args[0].expr).clone()),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "string", "maxLength") {
+            if call.args.len() != 1 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "string"),
+                bin(
+                    BinaryOp::LtEq,
+                    member_expr(value, "length"),
+                    (*call.args[0].expr).clone(),
+                ),
+            ));
+        }
+
+        if let Some(call) = self.is_p_chain_call(pattern, "number", "between") {
+            if call.args.len() != 2 {
+                return None;
+            }
+            return Some(and(
+                typeof_eq(value.clone(), "number"),
+                and(
+                    bin(BinaryOp::GtEq, value.clone(), (*call.args[0].expr).clone()),
+                    bin(BinaryOp::LtEq, value, (*call.args[1].expr).clone()),
+                ),
+            ));
+        }
+
+        for method in ["lt", "gt", "lte", "gte"] {
+            if let Some(call) = self.is_p_chain_call(pattern, "number", method) {
+                if call.args.len() != 1 {
+                    return None;
+                }
+                let op = match method {
+                    "lt" => BinaryOp::Lt,
+                    "gt" => BinaryOp::Gt,
+                    "lte" => BinaryOp::LtEq,
+                    "gte" => BinaryOp::GtEq,
+                    _ => unreachable!(),
+                };
+                return Some(and(
+                    typeof_eq(value.clone(), "number"),
+                    bin(op, value, (*call.args[0].expr).clone()),
+                ));
+            }
+        }
+
+        if self.is_p_chain_call(pattern, "number", "int").is_some() {
+            return Some(and(
+                typeof_eq(value.clone(), "number"),
+                call_member(
+                    member_expr(Expr::Ident(quote_ident!("Number").into()), "isInteger"),
+                    vec![value],
+                ),
+            ));
+        }
+
+        if self.is_p_chain_call(pattern, "number", "finite").is_some() {
+            return Some(and(
+                typeof_eq(value.clone(), "number"),
+                call_member(
+                    member_expr(Expr::Ident(quote_ident!("Number").into()), "isFinite"),
+                    vec![value],
+                ),
+            ));
+        }
+
+        if self
+            .is_p_chain_call(pattern, "number", "positive")
+            .is_some()
+        {
+            return Some(and(
+                typeof_eq(value.clone(), "number"),
+                bin(
+                    BinaryOp::Gt,
+                    value,
+                    Expr::Lit(Lit::Num(Number {
+                        span: DUMMY_SP,
+                        value: 0.0,
+                        raw: None,
+                    })),
+                ),
+            ));
+        }
+
+        if self
+            .is_p_chain_call(pattern, "number", "negative")
+            .is_some()
+        {
+            return Some(and(
+                typeof_eq(value.clone(), "number"),
+                bin(
+                    BinaryOp::Lt,
+                    value,
+                    Expr::Lit(Lit::Num(Number {
+                        span: DUMMY_SP,
+                        value: 0.0,
+                        raw: None,
+                    })),
                 ),
             ));
         }
@@ -1512,6 +1995,85 @@ fn array_is_array(value: Expr) -> Expr {
     )
 }
 
+fn array_from(value: Expr) -> Expr {
+    call_expr(
+        member_expr(Expr::Ident(quote_ident!("Array").into()), "from"),
+        vec![value],
+    )
+}
+
+fn object_entries(value: Expr) -> Expr {
+    call_expr(
+        member_expr(Expr::Ident(quote_ident!("Object").into()), "entries"),
+        vec![value],
+    )
+}
+
+fn object_keys(value: Expr) -> Expr {
+    call_expr(
+        member_expr(Expr::Ident(quote_ident!("Object").into()), "keys"),
+        vec![value],
+    )
+}
+
+fn object_values(value: Expr) -> Expr {
+    call_expr(
+        member_expr(Expr::Ident(quote_ident!("Object").into()), "values"),
+        vec![value],
+    )
+}
+
+fn record_aggregate_selections(
+    value: Expr,
+    key_ident: &Ident,
+    key_selections: Vec<SelectionBinding>,
+    value_ident: &Ident,
+    value_selections: Vec<SelectionBinding>,
+) -> Option<Vec<SelectionBinding>> {
+    let mut aggregated = Vec::new();
+
+    for selection in key_selections {
+        if !matches!(selection.value, Expr::Ident(ref ident) if ident.to_id() == key_ident.to_id())
+        {
+            return None;
+        }
+        aggregated.push(SelectionBinding {
+            name: selection.name,
+            value: object_keys(value.clone()),
+        });
+    }
+
+    for selection in value_selections {
+        if !matches!(selection.value, Expr::Ident(ref ident) if ident.to_id() == value_ident.to_id())
+        {
+            return None;
+        }
+        aggregated.push(SelectionBinding {
+            name: selection.name,
+            value: object_values(value.clone()),
+        });
+    }
+
+    let anonymous_count = aggregated
+        .iter()
+        .filter(|selection| selection.name.is_none())
+        .count();
+    (anonymous_count <= 1).then_some(aggregated)
+}
+
+fn instance_of(value: Expr, constructor: &str) -> Expr {
+    Expr::Bin(BinExpr {
+        span: DUMMY_SP,
+        op: BinaryOp::InstanceOf,
+        left: Box::new(value),
+        right: Box::new(Expr::Ident(Ident::new(
+            constructor.into(),
+            DUMMY_SP,
+            Default::default(),
+        ))),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1731,6 +2293,48 @@ const result = match(input).with({ type: "ok", data: { type: "img", src: P.selec
             output.contains("<img src=\"${input.data.src}\" />"),
             "{output}"
         );
+    }
+
+    #[test]
+    fn supports_pattern_alias_and_string_chain() {
+        let output = transform(
+            r#"import { match, Pattern } from "ts-pattern";
+const result = match(input).with(Pattern.string.startsWith("TS"), () => true).otherwise(() => false);"#,
+        );
+
+        assert!(output.contains("input.startsWith(\"TS\")"), "{output}");
+        assert!(!output.contains("match(input).with"), "{output}");
+    }
+
+    #[test]
+    fn supports_number_chain_and_const_pattern_alias() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const pattern = ["a", P.union("a", "b")] as const;
+const result = match(input).with(pattern, (value) => value[0]).with(P.number.gt(3), () => "n").otherwise(() => "x");"#,
+        );
+
+        assert!(output.contains("input[0] === \"a\""), "{output}");
+        assert!(
+            output.contains("input[1] === \"a\" || input[1] === \"b\""),
+            "{output}"
+        );
+        assert!(
+            output.contains("typeof input === \"number\" && input > 3"),
+            "{output}"
+        );
+        assert!(!output.contains("match(input).with"), "{output}");
+    }
+
+    #[test]
+    fn supports_record_select_aggregation() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with(P.record(P.string.select(), P.number), (keys) => keys.join(",")).otherwise(() => "");"#,
+        );
+
+        assert!(output.contains("Object.keys(input).join"), "{output}");
+        assert!(!output.contains("match(input).with"), "{output}");
     }
 
     #[test]

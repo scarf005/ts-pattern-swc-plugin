@@ -42,17 +42,20 @@ Deno.test("formatValue formats playground runtime values", () => {
   )
 })
 
-Deno.test("all examples run in the playground runtime", async () => {
-  await Deno.stat(pluginPath)
-
+const getExampleNames = async () => {
   const names: string[] = []
   for await (const entry of Deno.readDir(examplesRoot)) {
     if (entry.isFile && entry.name.endsWith(".ts")) names.push(entry.name)
   }
   names.sort()
   assert(names.length > 0)
+  return names
+}
 
-  for (const name of names) {
+Deno.test("all examples run in the playground runtime", async () => {
+  await Deno.stat(pluginPath)
+
+  for (const name of await getExampleNames()) {
     const source = await Deno.readTextFile(new URL(name, examplesRoot))
     const [baseline, optimized] = await Promise.all([
       transformExample(source, { plugin: false }),
@@ -80,5 +83,31 @@ Deno.test("all examples run in the playground runtime", async () => {
         `${name}: output ${index} differs`,
       )
     }
+  }
+})
+
+Deno.test("all match-based examples are compiled away", async () => {
+  await Deno.stat(pluginPath)
+
+  for (const name of await getExampleNames()) {
+    const source = await Deno.readTextFile(new URL(name, examplesRoot))
+    if (!source.includes("match(")) continue
+
+    const output = (await transform(source, {
+      filename: name,
+      sourceMaps: false,
+      jsc: {
+        parser: { syntax: "typescript", tsx: false },
+        target: "es2022",
+        experimental: { plugins: [[pluginPath, {}]] },
+      },
+      module: { type: "commonjs" },
+    })).code
+
+    assert(!output.includes(".with("), `${name}: still contains .with()`)
+    assert(
+      !output.includes(".otherwise(") && !output.includes(".exhaustive("),
+      `${name}: still contains ts-pattern chain`,
+    )
   }
 })
