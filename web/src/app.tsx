@@ -10,6 +10,7 @@ import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
 import * as tsRuntime from "monaco-editor/esm/vs/language/typescript/monaco.contribution"
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker"
 import TsWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker"
+import { readmeExamples } from "./generated/readme-examples.ts"
 
 type MonacoTypeScript =
   typeof import("monaco-editor/esm/vs/editor/editor.main").typescript
@@ -47,7 +48,7 @@ export const run = (event: Event): string =>
     .otherwise(() => "idle")
 `
 
-const commonPatterns = [
+const manualPatterns = [
   {
     id: "object",
     label: "Object ternary",
@@ -117,6 +118,8 @@ export const run = (item: Item): string =>
 `,
   },
 ] as const
+
+const commonPatterns = [...manualPatterns, ...readmeExamples] as const
 
 const DEFAULT_SOURCE = objectPatternSource
 const themeStorageKey = "ts-pattern-swc-playground-theme"
