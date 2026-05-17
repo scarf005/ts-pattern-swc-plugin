@@ -3,8 +3,8 @@
 import "./app.css"
 import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
-import { match, P } from "ts-pattern"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
+import { formatValue, getModule, type Runnable } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
 import * as tsRuntime from "monaco-editor/esm/vs/language/typescript/monaco.contribution"
@@ -72,8 +72,6 @@ type TransformOptions = {
   plugin: boolean
   moduleType: ModuleType
 }
-type Runnable = (input: unknown) => unknown
-type ModuleExports = { run: Runnable; inputs?: unknown[] }
 type BenchResult = { ms: number; checksum: number }
 type Theme = "white" | "dark"
 type PatternId = typeof commonPatterns[number]["id"] | "custom"
@@ -247,22 +245,6 @@ addEventListener("popstate", () => {
   if (pattern) selectPattern(pattern, { updatePath: false })
 })
 
-const getModule = (code: string): ModuleExports => {
-  const exports: Partial<ModuleExports> = {}
-  const requireShim = (name: string) => {
-    if (name === "ts-pattern") return { match, P }
-    throw new Error(`Unsupported import: ${name}`)
-  }
-  new Function("require", "exports", code)(requireShim, exports)
-  if (typeof exports.run !== "function") {
-    throw new Error("export const run = ... is required")
-  }
-  return {
-    run: exports.run,
-    inputs: Array.isArray(exports.inputs) ? exports.inputs : undefined,
-  }
-}
-
 const defaultBenchmarkInputs = [
   { type: "ok", value: 1 },
   { type: "ok", value: 2 },
@@ -295,12 +277,12 @@ const runCurrent = async () => {
       moduleType: "commonjs",
     })
     const module = getModule(code)
-    const inputs = module.inputs?.length
+    const inputs: unknown[] = module.inputs?.length
       ? module.inputs
       : defaultBenchmarkInputs
     runStatus.value = inputs
       .map((input) =>
-        `${JSON.stringify(input)} => ${JSON.stringify(module.run(input))}`
+        `${formatValue(input)} => ${formatValue(module.run(input))}`
       )
       .join("\n")
   } catch (error) {
@@ -326,18 +308,34 @@ const runBenchmark = async () => {
     ])
     const baseline = getModule(baselineCode)
     const optimized = getModule(compiledCode)
-    const inputs = baseline.inputs?.length
+    const baselineInputs = baseline.inputs?.length
       ? baseline.inputs
       : defaultBenchmarkInputs
-    for (const input of inputs) {
-      if (baseline.run(input) !== optimized.run(input)) {
+    const optimizedInputs = optimized.inputs?.length
+      ? optimized.inputs
+      : defaultBenchmarkInputs
+
+    if (baselineInputs.length !== optimizedInputs.length) {
+      throw new Error("Benchmark inputs differ")
+    }
+
+    for (const [index, baselineInput] of baselineInputs.entries()) {
+      const optimizedInput = optimizedInputs[index]
+      if (formatValue(baselineInput) !== formatValue(optimizedInput)) {
+        throw new Error("Benchmark inputs differ")
+      }
+      if (
+        formatValue(baseline.run(baselineInput)) !==
+          formatValue(optimized.run(optimizedInput))
+      ) {
         throw new Error("Benchmark outputs differ")
       }
     }
-    measure(baseline.run, inputs, 1000)
-    measure(optimized.run, inputs, 1000)
-    const baselineResult = measure(baseline.run, inputs, count)
-    const optimizedResult = measure(optimized.run, inputs, count)
+
+    measure(baseline.run, baselineInputs, 1000)
+    measure(optimized.run, optimizedInputs, 1000)
+    const baselineResult = measure(baseline.run, baselineInputs, count)
+    const optimizedResult = measure(optimized.run, optimizedInputs, count)
     if (baselineResult.checksum !== optimizedResult.checksum) {
       throw new Error("Benchmark checksums differ")
     }
