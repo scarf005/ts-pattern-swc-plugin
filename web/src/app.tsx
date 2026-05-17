@@ -4,6 +4,7 @@ import "./app.css"
 import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
+import { benchmarkInputsEqual, benchmarkModules } from "./benchmark.ts"
 import { formatValue, getModule, type Runnable } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
@@ -72,7 +73,6 @@ type TransformOptions = {
   plugin: boolean
   moduleType: ModuleType
 }
-type BenchResult = { ms: number; checksum: number }
 type Theme = "white" | "dark"
 type PatternId = typeof commonPatterns[number]["id"] | "custom"
 
@@ -252,22 +252,6 @@ const defaultBenchmarkInputs = [
   { type: "idle" },
 ]
 
-const score = (value: unknown) =>
-  typeof value === "number" ? value : String(value).length
-
-const measure = (
-  run: Runnable,
-  inputs: unknown[],
-  count: number,
-): BenchResult => {
-  let checksum = 0
-  const start = performance.now()
-  for (let index = 0; index < count; index += 1) {
-    checksum += score(run(inputs[index % inputs.length]))
-  }
-  return { ms: performance.now() - start, checksum }
-}
-
 const runCurrent = async () => {
   runStatus.value = "Running"
   try {
@@ -315,15 +299,12 @@ const runBenchmark = async () => {
       ? optimized.inputs
       : defaultBenchmarkInputs
 
-    if (baselineInputs.length !== optimizedInputs.length) {
+    if (!benchmarkInputsEqual(baselineInputs, optimizedInputs)) {
       throw new Error("Benchmark inputs differ")
     }
 
     for (const [index, baselineInput] of baselineInputs.entries()) {
       const optimizedInput = optimizedInputs[index]
-      if (formatValue(baselineInput) !== formatValue(optimizedInput)) {
-        throw new Error("Benchmark inputs differ")
-      }
       if (
         formatValue(baseline.run(baselineInput)) !==
           formatValue(optimized.run(optimizedInput))
@@ -332,17 +313,28 @@ const runBenchmark = async () => {
       }
     }
 
-    measure(baseline.run, baselineInputs, 1000)
-    measure(optimized.run, optimizedInputs, 1000)
-    const baselineResult = measure(baseline.run, baselineInputs, count)
-    const optimizedResult = measure(optimized.run, optimizedInputs, count)
-    if (baselineResult.checksum !== optimizedResult.checksum) {
-      throw new Error("Benchmark checksums differ")
-    }
-    benchmarkStatus.value = [
-      `ts-pattern: ${baselineResult.ms.toFixed(2)} ms`,
-      `compiled: ${optimizedResult.ms.toFixed(2)} ms`,
-      `speedup: ${(baselineResult.ms / optimizedResult.ms).toFixed(2)}x`,
+    const result = benchmarkModules({
+      baseline: {
+        code: baselineCode,
+        run: baseline.run,
+        inputs: baselineInputs,
+      },
+      optimized: {
+        code: compiledCode,
+        run: optimized.run,
+        inputs: optimizedInputs,
+      },
+      count,
+    })
+
+    benchmarkStatus.value = result.identicalCode ? result.note : [
+      `ts-pattern (median of ${result.sampleCount}): ${
+        result.baseline.ms.toFixed(2)
+      } ms`,
+      `compiled (median of ${result.sampleCount}): ${
+        result.optimized.ms.toFixed(2)
+      } ms`,
+      `speedup: ${result.speedup.toFixed(2)}x`,
     ].join("\n")
   } catch (error) {
     benchmarkStatus.value = error instanceof Error
