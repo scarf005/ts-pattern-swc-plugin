@@ -47,6 +47,16 @@ h1 {
   overflow: hidden;
 }
 
+.monaco-host .monaco-editor {
+  --monaco-monospace-font:
+    "Sarasa Mono K Nerd Font",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
+}
+
 pre {
   margin: 0;
   padding: 0.75rem;
@@ -55,7 +65,13 @@ pre {
   overflow: auto;
   background: var(--panel);
   color: var(--fg);
-  font: 0.875rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font:
+    0.875rem/1.5 "Sarasa Mono K Nerd Font",
+    ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    Consolas,
+    monospace;
 }
 
 button,

@@ -393,6 +393,8 @@ const TypeScriptEditor = (
     )
     const editor = monaco.editor.create(hostRef.current, {
       automaticLayout: true,
+      fontFamily:
+        "Sarasa Mono K Nerd Font, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 14,
       minimap: { enabled: false },
       model,
@@ -438,6 +440,8 @@ const CodeViewer = ({ value, theme }: CodeViewerProps) => {
     )
     const editor = monaco.editor.create(hostRef.current, {
       automaticLayout: true,
+      fontFamily:
+        "Sarasa Mono K Nerd Font, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
       fontSize: 14,
       minimap: { enabled: false },
       model,
