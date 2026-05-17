@@ -5,6 +5,7 @@ import { signal } from "@preact/signals"
 import { useEffect, useRef } from "preact/hooks"
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api"
 import { benchmarkInputsEqual, benchmarkModules } from "./benchmark.ts"
+import { cycleValue, getWheelStep } from "./example-wheel.ts"
 import { formatValue, getModule } from "./runtime.ts"
 import "monaco-editor/esm/vs/basic-languages/javascript/javascript.contribution"
 import "monaco-editor/esm/vs/basic-languages/typescript/typescript.contribution"
@@ -48,6 +49,8 @@ const commonPatterns = Object.entries(exampleSources)
     return { id, label: titleCase(id), source }
   })
   .sort((left, right) => left.label.localeCompare(right.label))
+
+const patternIds = commonPatterns.map((pattern) => pattern.id)
 
 const routeForPattern = (id: string) => `/examples/${id}`
 
@@ -375,11 +378,20 @@ const onPatternChange = (event: Event) => {
   selectPattern(pattern, { updatePath: true })
 }
 
-const onSelectWheel = (event: WheelEvent) => {
-  const select = event.currentTarget as HTMLSelectElement
+const onPatternWheel = (event: WheelEvent) => {
   event.preventDefault()
-  select.blur()
-  window.scrollBy({ left: event.deltaX, top: event.deltaY })
+  event.stopPropagation()
+  const nextId = cycleValue(
+    patternIds,
+    selectedPattern.value === "custom"
+      ? DEFAULT_PATTERN.id
+      : selectedPattern.value,
+    getWheelStep(event),
+  )
+  if (!nextId) return
+  const pattern = commonPatterns.find((item) => item.id === nextId)
+  if (!pattern) return
+  selectPattern(pattern, { updatePath: true })
 }
 
 const TypeScriptEditor = (
@@ -492,18 +504,14 @@ export const App = () => (
         <select
           value={selectedPattern.value}
           onChange={onPatternChange}
-          onWheel={onSelectWheel}
+          onWheel={onPatternWheel}
         >
           {commonPatterns.map((pattern) => (
             <option key={pattern.id} value={pattern.id}>{pattern.label}</option>
           ))}
           <option value="custom">Custom</option>
         </select>
-        <select
-          value={theme.value}
-          onChange={onThemeChange}
-          onWheel={onSelectWheel}
-        >
+        <select value={theme.value} onChange={onThemeChange}>
           <option value="white">White</option>
           <option value="dark">Dark</option>
         </select>
