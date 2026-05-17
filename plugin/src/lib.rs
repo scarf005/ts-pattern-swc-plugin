@@ -226,7 +226,7 @@ impl TsPatternTransformer {
         let mut cases = Vec::new();
 
         for arm in chain.arms {
-            let handler_call = call_handler(arm.handler, input_expr.clone());
+            let handler_call = handler_result(arm.handler, input_expr.clone());
             let mut arm_patterns = arm.patterns.into_iter().peekable();
 
             while let Some(pattern) = arm_patterns.next() {
@@ -261,13 +261,28 @@ impl TsPatternTransformer {
     }
 
     fn compile_if_chain(&self, chain: MatchChain) -> Option<Expr> {
+        if can_inline_input(&chain.input) && matches!(chain.fallback, Fallback::Otherwise(_)) {
+            let input = *chain.input;
+            let mut expression = fallback_expr(chain.fallback, input.clone());
+
+            for arm in chain.arms.into_iter().rev() {
+                expression = cond_expr(
+                    arm_test(self, input.clone(), &arm)?,
+                    handler_result(arm.handler, input.clone()),
+                    expression,
+                );
+            }
+
+            return Some(expression);
+        }
+
         let input_ident = private_ident!("_tsPatternInput");
         let mut expression = fallback_expr(chain.fallback, ident_expr(&input_ident));
 
         for arm in chain.arms.into_iter().rev() {
             expression = cond_expr(
-                arm_test(self, &input_ident, &arm)?,
-                call_handler(arm.handler, ident_expr(&input_ident)),
+                arm_test(self, ident_expr(&input_ident), &arm)?,
+                handler_result(arm.handler, ident_expr(&input_ident)),
                 expression,
             );
         }
@@ -521,17 +536,13 @@ fn parse_when_arm(call: &CallExpr) -> Option<MatchArm> {
     })
 }
 
-fn arm_test(
-    transformer: &TsPatternTransformer,
-    input_ident: &Ident,
-    arm: &MatchArm,
-) -> Option<Expr> {
+fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> Option<Expr> {
     let pattern_test = if arm.patterns.len() == 1 && matches!(*arm.patterns[0], Expr::Invalid(_)) {
         bool_lit(true)
     } else {
         arm.patterns
             .iter()
-            .map(|pattern| transformer.pattern_test(ident_expr(input_ident), pattern))
+            .map(|pattern| transformer.pattern_test(input.clone(), pattern))
             .try_fold(None, |acc, test| {
                 let test = test?;
                 Some(Some(match acc {
@@ -544,10 +555,14 @@ fn arm_test(
     match &arm.guard {
         Some(guard) => Some(and(
             pattern_test,
-            call_expr((**guard).clone(), vec![ident_expr(input_ident)]),
+            call_expr((**guard).clone(), vec![input]),
         )),
         None => Some(pattern_test),
     }
+}
+
+fn can_inline_input(expr: &Expr) -> bool {
+    matches!(expr, Expr::Ident(_) | Expr::Lit(_))
 }
 
 fn is_switchable_arm(arm: &MatchArm) -> bool {
@@ -662,14 +677,14 @@ fn const_stmt(ident: Ident, init: Expr) -> Stmt {
 
 fn fallback_stmts(fallback: Fallback, input_expr: Expr) -> Vec<Stmt> {
     match fallback {
-        Fallback::Otherwise(handler) => vec![return_stmt(call_handler(handler, input_expr))],
+        Fallback::Otherwise(handler) => vec![return_stmt(handler_result(handler, input_expr))],
         Fallback::Exhaustive => vec![throw_exhaustive_stmt()],
     }
 }
 
 fn fallback_expr(fallback: Fallback, input_expr: Expr) -> Expr {
     match fallback {
-        Fallback::Otherwise(handler) => call_handler(handler, input_expr),
+        Fallback::Otherwise(handler) => handler_result(handler, input_expr),
         Fallback::Exhaustive => iife(vec![throw_exhaustive_stmt()]),
     }
 }
@@ -699,6 +714,31 @@ fn return_stmt(expr: Expr) -> Stmt {
         span: DUMMY_SP,
         arg: Some(Box::new(expr)),
     })
+}
+
+fn handler_result(handler: Box<Expr>, input_expr: Expr) -> Expr {
+    match *handler {
+        Expr::Arrow(ArrowExpr {
+            params,
+            body,
+            is_async: false,
+            is_generator: false,
+            ..
+        }) if params.is_empty() => match *body {
+            BlockStmtOrExpr::Expr(expr) => *expr,
+            BlockStmtOrExpr::BlockStmt(block) => call_handler(Box::new(Expr::Arrow(ArrowExpr {
+                span: DUMMY_SP,
+                ctxt: Default::default(),
+                params,
+                body: Box::new(BlockStmtOrExpr::BlockStmt(block)),
+                is_async: false,
+                is_generator: false,
+                type_params: None,
+                return_type: None,
+            })), input_expr),
+        },
+        handler => call_handler(Box::new(handler), input_expr),
+    }
 }
 
 fn call_handler(handler: Box<Expr>, input_expr: Expr) -> Expr {
@@ -899,6 +939,19 @@ const result = match(input).with({ type: "ok", value: P.number }, (value) => val
         assert!(output.contains(":"), "{output}");
         assert!(output.contains("typeof"), "{output}");
         assert!(output.contains("value === \"number\""), "{output}");
+    }
+
+    #[test]
+    fn inlines_safe_input_ternary() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(value).with(P.union(P.string, P.number), () => "scalar").with(P.boolean, () => "flag").otherwise(() => "empty");"#,
+        );
+
+        assert!(!output.contains("_tsPatternInput"), "{output}");
+        assert!(!output.contains("(() => \"scalar\")("), "{output}");
+        assert!(output.contains("typeof value === \"string\""), "{output}");
+        assert!(output.contains("? \"scalar\""), "{output}");
     }
 
     #[test]
