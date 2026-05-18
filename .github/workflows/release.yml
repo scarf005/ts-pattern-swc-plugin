@@ -9,6 +9,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   test:
     name: Test
@@ -22,6 +25,9 @@ jobs:
         with: { deno-version: v2.x }
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-wasip1 }
+      - name: Install plugin npm dependencies
+        working-directory: plugin
+        run: npm ci
       - name: Rust unit tests
         run: cargo test --manifest-path plugin/Cargo.toml
       - name: Build SWC plugin wasm
@@ -44,9 +50,7 @@ jobs:
           npm test
       - name: npm package dry run
         working-directory: plugin
-        run: |
-          npm ci
-          npm pack --dry-run
+        run: npm pack --dry-run
       - name: JSR publish dry run
         working-directory: plugin
         run: deno publish --dry-run
