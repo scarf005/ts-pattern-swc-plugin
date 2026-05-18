@@ -1,0 +1,29 @@
+{
+  "name": "@scarf/ts-pattern-swc-plugin",
+  "version": "0.1.0",
+  "license": "MIT",
+  "exports": {
+    ".": "./transform.mjs",
+    "./loader": "./loader.mjs",
+    "./register": "./register.mjs",
+    "./run": "./run.mjs",
+    "./transform": "./transform.mjs"
+  },
+  "nodeModulesDir": "auto",
+  "imports": {
+    "@swc/core": "npm:@swc/core@^1.15.33"
+  },
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"]
+  },
+  "publish": {
+    "include": [
+      "README.md",
+      "loader.mjs",
+      "register.mjs",
+      "run.mjs",
+      "transform.mjs",
+      "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm"
+    ]
+  }
+}
