@@ -1,3 +1,6 @@
 [submodule "vendor/ts-pattern"]
 	path = vendor/ts-pattern
 	url = https://github.com/gvergnaud/ts-pattern.git
+[submodule "vendor/ts-pattern-benchmark"]
+	path = vendor/ts-pattern-benchmark
+	url = https://github.com/bdbaraban/ts-pattern-benchmark.git

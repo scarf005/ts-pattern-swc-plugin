@@ -5,13 +5,129 @@ import { garbageInputPairsForInputs, seedFromString } from "./src/property.ts"
 import { getModule, type ModuleExports } from "./src/runtime.ts"
 import { pluginPath, transformWithSwcWasm } from "./src/swc-wasm-transform.ts"
 
-type BenchExample = {
+type BenchTarget = {
+  label: string
+  module: Required<ModuleExports>
+  baseline?: boolean
+}
+
+type BenchCase = {
   id: string
-  baseline: Required<ModuleExports>
-  optimized: Required<ModuleExports>
+  targets: BenchTarget[]
 }
 
 const examplesRoot = new URL("../examples/", import.meta.url)
+const tsPatternBenchmarkRoot = new URL(
+  "../vendor/ts-pattern-benchmark/tests/",
+  import.meta.url,
+)
+
+const digitInputs = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+
+const digitMatcherSource = (inputs: number[]) => `
+import { match } from "ts-pattern"
+
+type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+
+export const inputs = ${JSON.stringify(inputs)} as Digit[]
+
+export const run = (digit: Digit): string =>
+  match(digit)
+    .with(0, () => "zero")
+    .with(1, () => "one")
+    .with(2, () => "two")
+    .with(3, () => "three")
+    .with(4, () => "four")
+    .with(5, () => "five")
+    .with(6, () => "six")
+    .with(7, () => "seven")
+    .with(8, () => "eight")
+    .with(9, () => "nine")
+    .otherwise(() => "")
+`
+
+const digitNativeSource = (inputs: number[]) => `
+type Digit = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9
+
+export const inputs = ${JSON.stringify(inputs)} as Digit[]
+
+export const run = (digit: Digit): string =>
+  digit === 0 ? "zero"
+    : digit === 1 ? "one"
+    : digit === 2 ? "two"
+    : digit === 3 ? "three"
+    : digit === 4 ? "four"
+    : digit === 5 ? "five"
+    : digit === 6 ? "six"
+    : digit === 7 ? "seven"
+    : digit === 8 ? "eight"
+    : digit === 9 ? "nine"
+    : ""
+`
+
+const nestedMatcherSource = `
+import { match, P } from "ts-pattern"
+
+export const inputs = [
+  { type: "a", value: { x: 1, y: 2 } },
+  { type: "b", value: [1, 2, 3, 4] },
+  { type: "c", age: 5, name: "acdfl" },
+  { type: "z" },
+]
+
+export const run = (input: unknown): string =>
+  match(input)
+    .with({ type: "a", value: { x: P.number, y: P.number } }, () => "1")
+    .with({ type: "b", value: P.array(P.number) }, () => "2")
+    .with({ type: "c", name: P.string, age: P.number }, () => "3")
+    .otherwise(() => "4")
+`
+
+const nestedNativeSource = `
+export const inputs = [
+  { type: "a", value: { x: 1, y: 2 } },
+  { type: "b", value: [1, 2, 3, 4] },
+  { type: "c", age: 5, name: "acdfl" },
+  { type: "z" },
+]
+
+export const run = (input: unknown): string =>
+  input !== null && typeof input === "object" && "type" in input && input.type === "a" &&
+      "value" in input && input.value !== null && typeof input.value === "object" &&
+      "x" in input.value && typeof input.value.x === "number" &&
+      "y" in input.value && typeof input.value.y === "number"
+    ? "1"
+    : input !== null && typeof input === "object" && "type" in input && input.type === "b" &&
+        "value" in input && Array.isArray(input.value) &&
+        input.value.every((value) => typeof value === "number")
+    ? "2"
+    : input !== null && typeof input === "object" && "type" in input && input.type === "c" &&
+        "name" in input && typeof input.name === "string" &&
+        "age" in input && typeof input.age === "number"
+    ? "3"
+    : "4"
+`
+
+const benchmarkSources = [
+  {
+    id: "ts-pattern-benchmark/always-last-digit",
+    sourceFile: "always-last-digit.mts",
+    matcher: digitMatcherSource([9]),
+    native: digitNativeSource([9]),
+  },
+  {
+    id: "ts-pattern-benchmark/random-digit",
+    sourceFile: "random-digit.mts",
+    matcher: digitMatcherSource(digitInputs),
+    native: digitNativeSource(digitInputs),
+  },
+  {
+    id: "ts-pattern-benchmark/nested-objects",
+    sourceFile: "nested-objects.mts",
+    matcher: nestedMatcherSource,
+    native: nestedNativeSource,
+  },
+]
 
 const getExampleNames = async () => {
   const names: string[] = []
@@ -32,7 +148,7 @@ const transformExample = async (source: string, options: { plugin: boolean }) =>
     })).code,
   )
 
-const loadExample = async (name: string): Promise<BenchExample> => {
+const loadExample = async (name: string): Promise<BenchCase> => {
   const source = await Deno.readTextFile(new URL(name, examplesRoot))
   const [baseline, optimized] = await Promise.all([
     transformExample(source, { plugin: false }),
@@ -57,9 +173,71 @@ const loadExample = async (name: string): Promise<BenchExample> => {
 
   return {
     id: name.replace(/\.ts$/, ""),
-    baseline: { run: baseline.run, inputs: inputs.baselineInputs },
-    optimized: { run: optimized.run, inputs: inputs.optimizedInputs },
+    targets: [
+      {
+        label: "ts-pattern raw",
+        module: { run: baseline.run, inputs: inputs.baselineInputs },
+      },
+      {
+        label: "ts-pattern swc plugin",
+        module: { run: optimized.run, inputs: inputs.optimizedInputs },
+        baseline: true,
+      },
+    ],
   }
+}
+
+const assertSameOutputs = (id: string, targets: BenchTarget[]) => {
+  const [first, ...rest] = targets
+  if (!first) throw new Error(`${id}: missing benchmark targets`)
+
+  for (const input of first.module.inputs) {
+    const expected = first.module.run(input)
+    for (const target of rest) {
+      const actual = target.module.run(input)
+      if (!Object.is(actual, expected)) {
+        throw new Error(
+          `${id}: ${target.label} returned ${String(actual)} instead of ${
+            String(expected)
+          }`,
+        )
+      }
+    }
+  }
+}
+
+const loadTsPatternBenchmarkCase = async (
+  source: (typeof benchmarkSources)[number],
+): Promise<BenchCase> => {
+  await Deno.stat(new URL(source.sourceFile, tsPatternBenchmarkRoot))
+  const [raw, native, optimized] = await Promise.all([
+    transformExample(source.matcher, { plugin: false }),
+    transformExample(source.native, { plugin: false }),
+    transformExample(source.matcher, { plugin: true }),
+  ])
+
+  if (!raw.inputs?.length) throw new Error(`${source.id}: missing raw inputs`)
+  if (!native.inputs?.length) {
+    throw new Error(`${source.id}: missing native inputs`)
+  }
+  if (!optimized.inputs?.length) {
+    throw new Error(`${source.id}: missing optimized inputs`)
+  }
+
+  const targets = [
+    { label: "ts-pattern raw", module: raw as Required<ModuleExports> },
+    {
+      label: "native code",
+      module: native as Required<ModuleExports>,
+      baseline: true,
+    },
+    {
+      label: "ts-pattern swc plugin",
+      module: optimized as Required<ModuleExports>,
+    },
+  ]
+  assertSameOutputs(source.id, targets)
+  return { id: source.id, targets }
 }
 
 const createRunner = (module: Required<ModuleExports>) => {
@@ -71,29 +249,29 @@ const createRunner = (module: Required<ModuleExports>) => {
   }
 }
 
+const registerBenchCase = (benchCase: BenchCase) => {
+  for (const target of benchCase.targets) {
+    const run = createRunner(target.module)
+    Deno.bench({
+      name: target.label,
+      group: benchCase.id,
+      baseline: target.baseline,
+    }, () => {
+      sink = run()
+    })
+  }
+}
+
 await Deno.stat(pluginPath)
-const examples = await Promise.all((await getExampleNames()).map(loadExample))
+const [examples, tsPatternBenchmarkCases] = await Promise.all([
+  Promise.all((await getExampleNames()).map(loadExample)),
+  Promise.all(benchmarkSources.map(loadTsPatternBenchmarkCase)),
+])
 
 let sink: unknown
 
-for (const example of examples) {
-  const runBaseline = createRunner(example.baseline)
-  const runOptimized = createRunner(example.optimized)
-
-  Deno.bench({
-    name: "ts-pattern runtime",
-    group: example.id,
-  }, () => {
-    sink = runBaseline()
-  })
-
-  Deno.bench({
-    name: "ts-pattern swc plugin runtime",
-    group: example.id,
-    baseline: true,
-  }, () => {
-    sink = runOptimized()
-  })
+for (const benchCase of [...tsPatternBenchmarkCases, ...examples]) {
+  registerBenchCase(benchCase)
 }
 
 addEventListener("unload", () => {

@@ -353,23 +353,7 @@ impl TsPatternTransformer {
     }
 
     fn compile_chain(&mut self, chain: MatchChain) -> Option<Expr> {
-        if is_object_switch_chain(&chain) {
-            return self.compile_object_switch(chain);
-        }
-
-        if chain.arms.iter().all(is_switchable_arm) {
-            Some(self.compile_switch(chain))
-        } else {
-            self.compile_if_chain(chain)
-        }
-    }
-
-    fn compile_switch(&mut self, chain: MatchChain) -> Expr {
-        iife(self.compile_switch_stmts(chain))
-    }
-
-    fn compile_object_switch(&mut self, chain: MatchChain) -> Option<Expr> {
-        Some(iife(self.compile_object_switch_stmts(chain)?))
+        self.compile_ternary_chain(chain)
     }
 
     fn compile_switch_stmts(&mut self, chain: MatchChain) -> Vec<Stmt> {
@@ -513,24 +497,27 @@ impl TsPatternTransformer {
         Some(stmts)
     }
 
-    fn compile_if_chain(&mut self, chain: MatchChain) -> Option<Expr> {
-        if can_inline_input(&chain.input) && matches!(chain.fallback, Fallback::Otherwise(_)) {
-            let input = *chain.input;
-            let mut expression = fallback_expr(chain.fallback, input.clone(), None);
-
-            for arm in chain.arms.into_iter().rev() {
-                let handler_input = arm_handler_input(self, input.clone(), &arm)?;
-                expression = cond_expr(
-                    arm_test(self, input.clone(), &arm)?,
-                    handler_result(arm.handler, handler_input),
-                    expression,
-                );
-            }
-
-            return Some(expression);
+    fn compile_ternary_chain(&mut self, chain: MatchChain) -> Option<Expr> {
+        if !can_inline_input(&chain.input) || !matches!(chain.fallback, Fallback::Otherwise(_)) {
+            return None;
         }
 
-        Some(iife(self.compile_if_stmts(chain)?))
+        let input = *chain.input;
+        let Fallback::Otherwise(fallback) = chain.fallback else {
+            return None;
+        };
+        let mut expression = handler_result(fallback, input.clone());
+
+        for arm in chain.arms.into_iter().rev() {
+            let handler_input = arm_handler_input(self, input.clone(), &arm)?;
+            expression = cond_expr(
+                arm_test(self, input.clone(), &arm)?,
+                handler_result(arm.handler, handler_input),
+                expression,
+            );
+        }
+
+        Some(expression)
     }
 
     fn exhaustive_error_callee(&mut self) -> Expr {
@@ -1116,7 +1103,7 @@ impl TsPatternTransformer {
             if call.args.len() != 1 {
                 return None;
             }
-            return Some(call_expr((*call.args[0].expr).clone(), vec![value]));
+            return Some(predicate_result(&call.args[0].expr, value));
         }
 
         match pattern {
@@ -1393,7 +1380,11 @@ fn selection_name(expr: &Expr) -> Option<String> {
 }
 
 fn guard_result(guard: &Expr, input_expr: Expr) -> Expr {
-    match guard {
+    predicate_result(guard, input_expr)
+}
+
+fn predicate_result(predicate: &Expr, input_expr: Expr) -> Expr {
+    match predicate {
         Expr::Arrow(ArrowExpr {
             params,
             body,
@@ -1409,9 +1400,9 @@ fn guard_result(guard: &Expr, input_expr: Expr) -> Expr {
                 }
             }
 
-            call_expr(guard.clone(), vec![input_expr])
+            call_handler(Box::new(predicate.clone()), input_expr)
         }
-        _ => call_expr(guard.clone(), vec![input_expr]),
+        _ => call_handler(Box::new(predicate.clone()), input_expr),
     }
 }
 
@@ -1552,29 +1543,6 @@ fn prop_access(value: Expr, key: &PropName) -> Option<Expr> {
     }
 }
 
-fn iife(stmts: Vec<Stmt>) -> Expr {
-    call_expr(
-        Expr::Paren(ParenExpr {
-            span: DUMMY_SP,
-            expr: Box::new(Expr::Arrow(ArrowExpr {
-                span: DUMMY_SP,
-                ctxt: Default::default(),
-                params: Vec::new(),
-                body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                    span: DUMMY_SP,
-                    ctxt: Default::default(),
-                    stmts,
-                })),
-                is_async: false,
-                is_generator: false,
-                type_params: None,
-                return_type: None,
-            })),
-        }),
-        Vec::new(),
-    )
-}
-
 fn const_stmt(ident: Ident, init: Expr) -> Stmt {
     Stmt::Decl(Decl::Var(Box::new(VarDecl {
         span: DUMMY_SP,
@@ -1601,20 +1569,6 @@ fn fallback_stmts(
             exhaustive_error_callee.expect("exhaustive error callee"),
             input_expr,
         )],
-    }
-}
-
-fn fallback_expr(
-    fallback: Fallback,
-    input_expr: Expr,
-    exhaustive_error_callee: Option<Expr>,
-) -> Expr {
-    match fallback {
-        Fallback::Otherwise(handler) => handler_result(handler, input_expr),
-        Fallback::Exhaustive => iife(vec![throw_exhaustive_stmt(
-            exhaustive_error_callee.expect("exhaustive error callee"),
-            input_expr,
-        )]),
     }
 }
 
@@ -2122,15 +2076,16 @@ mod tests {
     }
 
     #[test]
-    fn emits_switch_for_literal_match() {
+    fn emits_ternary_for_literal_match_expression() {
         let output = transform(
             r#"import { match } from "ts-pattern";
 const result = match(input).with("a", () => 1).with("b", () => 2).otherwise(() => 0);"#,
         );
 
-        assert!(output.contains("switch"), "{output}");
-        assert!(output.contains("case \"a\""), "{output}");
-        assert!(output.contains("default"), "{output}");
+        assert!(output.contains("input === \"a\" ? 1"), "{output}");
+        assert!(output.contains(": input === \"b\" ? 2 : 0"), "{output}");
+        assert!(!output.contains("switch"), "{output}");
+        assert!(!output.contains("(()=>"), "{output}");
     }
 
     #[test]
@@ -2185,6 +2140,37 @@ const result = match(input).with({ type: "ok", value: P.number }, (value) => val
         assert!(output.contains(":"), "{output}");
         assert!(output.contains("typeof"), "{output}");
         assert!(output.contains("value === \"number\""), "{output}");
+        assert!(!output.contains("(()=>"), "{output}");
+    }
+
+    #[test]
+    fn emits_ternary_for_object_discriminant_expression() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+const result = match(input).with({ type: "text" }, () => "text").with({ type: "img" }, () => "image").otherwise(() => "other");"#,
+        );
+
+        assert!(
+            output.contains("input.type === \"text\" ? \"text\""),
+            "{output}"
+        );
+        assert!(
+            output.contains("input.type === \"img\" ? \"image\" : \"other\""),
+            "{output}"
+        );
+        assert!(!output.contains("switch"), "{output}");
+        assert!(!output.contains("(()=>"), "{output}");
+    }
+
+    #[test]
+    fn leaves_effectful_input_unchanged_to_avoid_iife() {
+        let output = transform(
+            r#"import { match } from "ts-pattern";
+const result = match(next()).with("a", () => 1).otherwise(() => 0);"#,
+        );
+
+        assert!(output.contains("match(next()).with"), "{output}");
+        assert!(!output.contains("(()=>{"), "{output}");
     }
 
     #[test]
@@ -2212,6 +2198,41 @@ const result = match(item).with({ count: P.number }, ({ count }) => count > 5, (
     }
 
     #[test]
+    fn inlines_simple_p_when_predicate() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with({ score: P.when((score) => score < 5) }, () => "low").otherwise(() => "ok");"#,
+        );
+
+        assert!(output.contains("input.score < 5"), "{output}");
+        assert!(!output.contains("=>score < 5"), "{output}");
+        assert!(!output.contains(")(input.score)"), "{output}");
+    }
+
+    #[test]
+    fn inlines_simple_p_when_type_predicate() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with({ score: P.when((score): score is 5 => score === 5) }, () => "five").otherwise(() => "other");"#,
+        );
+
+        assert!(output.contains("input.score === 5"), "{output}");
+        assert!(!output.contains("=>score === 5"), "{output}");
+        assert!(!output.contains(")(input.score)"), "{output}");
+    }
+
+    #[test]
+    fn keeps_complex_p_when_predicate_call() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+const result = match(input).with(P.when((value) => value > 0 && value < 10), () => "ok").otherwise(() => "other");"#,
+        );
+
+        assert!(output.contains("=>value > 0 && value < 10"), "{output}");
+        assert!(output.contains(")(input)"), "{output}");
+    }
+
+    #[test]
     fn inlines_simple_destructured_handler() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
@@ -2226,7 +2247,7 @@ const result = match(input).with({ type: "ok", value: P.number }, ({ value }) =>
     fn requires_object_key_for_wildcard_property() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
-const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId: P._ }, () => "team").exhaustive();"#,
+const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId: P._ }, () => "team").otherwise(() => "none");"#,
         );
 
         assert!(output.contains("\"storeId\" in input"), "{output}");
@@ -2237,7 +2258,7 @@ const result = match(input).with({ storeId: P._ }, () => "store").with({ teamId:
     fn requires_object_key_for_undefined_property() {
         let output = transform(
             r#"import { match } from "ts-pattern";
-const result = match(input).with({ type: undefined }, () => true).exhaustive();"#,
+const result = match(input).with({ type: undefined }, () => true).otherwise(() => false);"#,
         );
 
         assert!(output.contains("\"type\" in input"), "{output}");
@@ -2245,17 +2266,14 @@ const result = match(input).with({ type: undefined }, () => true).exhaustive();"
     }
 
     #[test]
-    fn throws_ts_pattern_non_exhaustive_error() {
+    fn leaves_exhaustive_expression_unchanged_to_avoid_iife() {
         let output = transform(
             r#"import { match } from "ts-pattern";
 const result = match(input).with("ok", () => true).exhaustive();"#,
         );
 
-        assert!(output.contains("NonExhaustiveError"), "{output}");
-        assert!(
-            output.contains("throw new NonExhaustiveError(_tsPatternInput)"),
-            "{output}"
-        );
+        assert!(output.contains("match(input).with"), "{output}");
+        assert!(!output.contains("(()=>{"), "{output}");
     }
 
     #[test]
@@ -2265,8 +2283,11 @@ const result = match(input).with("ok", () => true).exhaustive();"#,
 const result = match(input).with("ok", () => true).otherwise(() => false);"#,
         );
 
-        assert!(output.contains("switch"), "{output}");
-        assert!(output.contains("case \"ok\""), "{output}");
+        assert!(
+            output.contains("input === \"ok\" ? true : false"),
+            "{output}"
+        );
+        assert!(!output.contains("match(input).with"), "{output}");
     }
 
     #[test]
