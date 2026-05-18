@@ -6,7 +6,6 @@
     ".": "./transform.mjs",
     "./loader": "./loader.mjs",
     "./register": "./register.mjs",
-    "./run": "./run.mjs",
     "./transform": "./transform.mjs"
   },
   "nodeModulesDir": "auto",
@@ -14,16 +13,24 @@
     "@swc/core": "npm:@swc/core@^1.15.33"
   },
   "compilerOptions": {
-    "lib": ["ES2022", "DOM"]
+    "lib": [
+      "ES2022",
+      "DOM"
+    ]
   },
   "publish": {
     "include": [
       "README.md",
       "loader.mjs",
       "register.mjs",
-      "run.mjs",
       "transform.mjs",
+      "loader.d.ts",
+      "register.d.ts",
+      "transform.d.ts",
       "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm"
     ]
-  }
+  },
+  "allowScripts": [
+    "npm:@swc/core@1.15.33"
+  ]
 }

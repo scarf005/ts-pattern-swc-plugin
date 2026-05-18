@@ -2,6 +2,7 @@ web:
     cd web && deno task dev
 
 test:
+    cd plugin && npm ci
     cargo test --manifest-path plugin/Cargo.toml
     cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
     cd web && deno task check
@@ -16,8 +17,8 @@ check-examples:
     cd examples && deno task check
 
 test-vendored-ts-pattern:
-    deno run -A --unstable-detect-cjs scripts/check-vendored-ts-pattern-swc.ts
     cd vendor/ts-pattern && npm ci
+    deno run -A --unstable-detect-cjs scripts/check-vendored-ts-pattern-swc.ts
     cd vendor/ts-pattern && npm test
 
 bench-ts-pattern: bench

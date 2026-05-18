@@ -1,17 +1,29 @@
 {
   "name": "ts-pattern-swc-plugin",
   "version": "0.1.0",
-  "description": "SWC plugin that compiles ts-pattern match expressions into switch/if-else chains",
+  "description": "SWC plugin that compiles supported ts-pattern match expressions into plain JavaScript control flow",
   "license": "MIT",
   "type": "commonjs",
   "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
   "exports": {
     ".": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
     "./wasm": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
-    "./loader": "./loader.mjs",
-    "./register": "./register.mjs",
-    "./run": "./run.mjs",
-    "./transform": "./transform.mjs",
+    "./loader": {
+      "types": "./loader.d.ts",
+      "default": "./loader.mjs"
+    },
+    "./register": {
+      "types": "./register.d.ts",
+      "default": "./register.mjs"
+    },
+    "./run": {
+      "types": "./run.d.ts",
+      "default": "./run.mjs"
+    },
+    "./transform": {
+      "types": "./transform.d.ts",
+      "default": "./transform.mjs"
+    },
     "./package.json": "./package.json"
   },
   "bin": {
@@ -23,6 +35,10 @@
     "register.mjs",
     "run.mjs",
     "transform.mjs",
+    "loader.d.ts",
+    "register.d.ts",
+    "run.d.ts",
+    "transform.d.ts",
     "README.md"
   ],
   "scripts": {
@@ -43,5 +59,13 @@
   },
   "devDependencies": {
     "@swc/binding_core_wasm": "https://github.com/scarf005/swc-wasm/releases/download/binding-core-wasm-plugin-v1.15.33-plugin.1/swc-binding_core_wasm-1.15.33.tgz"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/scarf005/ts-pattern-swc-plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/scarf005/ts-pattern-swc-plugin/issues"
+  },
+  "homepage": "https://github.com/scarf005/ts-pattern-swc-plugin#readme"
 }

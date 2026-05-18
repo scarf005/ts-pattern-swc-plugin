@@ -1,3 +1,4 @@
+// @ts-self-types="./register.d.ts"
 import { register } from "node:module"
 import { fileURLToPath } from "node:url"
 

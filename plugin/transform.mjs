@@ -1,3 +1,4 @@
+// @ts-self-types="./transform.d.ts"
 import swc, { transform as namedTransform } from "@swc/core"
 import { fileURLToPath } from "node:url"
 

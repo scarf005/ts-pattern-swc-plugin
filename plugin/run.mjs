@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+// @ts-self-types="./run.d.ts"
 import "./register.mjs"
 import { resolve } from "node:path"
 import { pathToFileURL } from "node:url"

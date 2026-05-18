@@ -1,3 +1,4 @@
+// @ts-self-types="./loader.d.ts"
 import { access, readFile } from "node:fs/promises"
 import { extname, isAbsolute, resolve as resolvePath } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
