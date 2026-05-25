@@ -2,7 +2,7 @@
   "name": "@scarf/ts-pattern-swc-plugin",
   "version": "0.1.0",
   "description": "SWC plugin that compiles supported ts-pattern match expressions into plain JavaScript control flow",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "type": "commonjs",
   "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
   "exports": {

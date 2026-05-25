@@ -2,7 +2,7 @@
 name = "ts-pattern-swc-plugin"
 version = "0.1.0"
 edition = "2021"
-license = "MIT"
+license = "AGPL-3.0-only"
 description = "SWC plugin that compiles ts-pattern match expressions into switch/if-else chains"
 repository = "https://github.com/scarf005/ts-pattern-swc-plugin"
 

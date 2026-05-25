@@ -1,7 +1,7 @@
 {
   "name": "@scarf/ts-pattern-swc-plugin",
   "version": "0.1.0",
-  "license": "MIT",
+  "license": "AGPL-3.0-only",
   "exports": {
     ".": "./transform.mjs",
     "./loader": "./loader.mjs",
