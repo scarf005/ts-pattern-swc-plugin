@@ -1,0 +1,13 @@
+main {
+  max-width: 40rem;
+  margin: 4rem auto;
+  padding: 0 1rem;
+}
+
+h1 {
+  font-size: 2rem;
+}
+
+li {
+  margin: 0.5rem 0;
+}

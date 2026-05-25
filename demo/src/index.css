@@ -1,0 +1,17 @@
+:root {
+  color: #111827;
+  background: #ffffff;
+  font-family: system-ui, sans-serif;
+  color-scheme: light dark;
+}
+
+body {
+  margin: 0;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color: #f9fafb;
+    background: #111827;
+  }
+}
