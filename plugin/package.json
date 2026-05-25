@@ -1,5 +1,5 @@
 {
-  "name": "ts-pattern-swc-plugin",
+  "name": "@scarf/ts-pattern-swc-plugin",
   "version": "0.1.0",
   "description": "SWC plugin that compiles supported ts-pattern match expressions into plain JavaScript control flow",
   "license": "MIT",

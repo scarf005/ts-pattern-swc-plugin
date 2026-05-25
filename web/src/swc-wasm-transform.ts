@@ -27,7 +27,7 @@ export const pluginPath = resolve(
   "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
 )
 
-const pluginName = "ts-pattern-swc-plugin"
+const pluginName = "@scarf/ts-pattern-swc-plugin"
 const require = createRequire(import.meta.url)
 const swcWasmPackagePath = resolve(
   pluginRoot,

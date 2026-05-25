@@ -1,4 +1,4 @@
-# ts-pattern-swc-plugin
+# @scarf/ts-pattern-swc-plugin
 
 SWC plugin that compiles supported [`ts-pattern`](https://github.com/gvergnaud/ts-pattern) `match` expressions into plain JavaScript ternaries, `switch` statements, or `if` chains.
 
@@ -22,7 +22,7 @@ Arrow-bodied matches are emitted as `switch` statements or `if` blocks when a st
 ## Install
 
 ```sh
-npm install ts-pattern-swc-plugin
+npm install @scarf/ts-pattern-swc-plugin
 ```
 
 ## Configure SWC
@@ -31,7 +31,7 @@ npm install ts-pattern-swc-plugin
 {
   "jsc": {
     "experimental": {
-      "plugins": [["ts-pattern-swc-plugin", {}]]
+      "plugins": [["@scarf/ts-pattern-swc-plugin", {}]]
     }
   }
 }
@@ -46,7 +46,7 @@ The package also ships a Node/Deno loader that compiles `.ts`, `.tsx`, `.mts`, a
 Install the runtime dependencies in your project:
 
 ```sh
-npm install ts-pattern ts-pattern-swc-plugin @swc/core
+npm install ts-pattern @scarf/ts-pattern-swc-plugin @swc/core
 ```
 
 Run an entrypoint through the bundled CLI:
@@ -58,7 +58,7 @@ npx ts-pattern-swc ./foo.ts
 Or preload the loader for regular Node execution:
 
 ```sh
-node --import ts-pattern-swc-plugin/register ./foo.ts
+node --import @scarf/ts-pattern-swc-plugin/register ./foo.ts
 ```
 
 ### Deno
@@ -66,13 +66,13 @@ node --import ts-pattern-swc-plugin/register ./foo.ts
 Deno needs a version with `node:module` `register()` loader hooks. Use `import { match } from "ts-pattern"` with a `deno.json` import map, or `import { match } from "npm:ts-pattern"`. Run via npm specifiers:
 
 ```sh
-deno run -A npm:ts-pattern-swc-plugin/run ./foo.ts
+deno run -A npm:@scarf/ts-pattern-swc-plugin/run ./foo.ts
 ```
 
 Or preload the loader:
 
 ```sh
-deno run -A --import npm:ts-pattern-swc-plugin/register ./foo.ts
+deno run -A --import npm:@scarf/ts-pattern-swc-plugin/register ./foo.ts
 ```
 
 For local development from this repository:
@@ -84,7 +84,7 @@ deno run -A --import ./plugin/register.mjs ./foo.ts
 ### Programmatic transform
 
 ```ts
-import { transformTsPattern } from "ts-pattern-swc-plugin/transform";
+import { transformTsPattern } from "@scarf/ts-pattern-swc-plugin/transform";
 
 const result = await transformTsPattern(source, { filename: "foo.ts" });
 console.log(result.code);
