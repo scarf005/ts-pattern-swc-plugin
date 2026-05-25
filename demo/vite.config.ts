@@ -17,7 +17,16 @@ const tsPatternSwcPlugin = (): Plugin => {
       const result = await transformTsPattern(code, {
         filename,
         sourceMaps: false,
-        swcOptions: { module: { type: 'es6' } },
+        swcOptions: {
+          module: { type: 'es6' },
+          jsc: {
+            transform: {
+              react: {
+                runtime: 'automatic',
+              },
+            },
+          },
+        },
       })
 
       if (normalizePath(filename).endsWith('/src/App.tsx')) {
