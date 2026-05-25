@@ -3,14 +3,19 @@ import react from '@vitejs/plugin-react'
 import { transformTsPattern } from '@scarf/ts-pattern-swc-plugin/transform'
 
 const tsPatternSwcPlugin = (): Plugin => {
-  let appTransformed = false
+  let swcRunnerTransformed = false
 
   return {
     name: 'ts-pattern-swc-plugin-demo',
     enforce: 'pre',
     async transform(code, id) {
       const filename = id.split('?')[0]
-      if (!/\.[cm]?tsx?$/.test(filename) || filename.includes('/node_modules/')) {
+      const normalizedFilename = normalizePath(filename)
+      if (
+        !/\.[cm]?tsx?$/.test(filename) ||
+        filename.includes('/node_modules/') ||
+        normalizedFilename.endsWith('/src/runners/ts-pattern-as-is.tsx')
+      ) {
         return null
       }
 
@@ -29,15 +34,15 @@ const tsPatternSwcPlugin = (): Plugin => {
         },
       })
 
-      if (normalizePath(filename).endsWith('/src/App.tsx')) {
-        appTransformed = true
+      if (normalizedFilename.endsWith('/src/runners/ts-pattern-swc.tsx')) {
+        swcRunnerTransformed = true
       }
 
       return { code: result.code, map: null }
     },
     buildEnd() {
-      if (!appTransformed) {
-        this.error('ts-pattern SWC plugin did not transform src/App.tsx')
+      if (!swcRunnerTransformed) {
+        this.error('ts-pattern SWC plugin did not transform src/runners/ts-pattern-swc.tsx')
       }
     },
   }

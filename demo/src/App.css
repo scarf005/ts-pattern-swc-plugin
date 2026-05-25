@@ -1,13 +1,103 @@
 main {
-  max-width: 40rem;
-  margin: 4rem auto;
-  padding: 0 1rem;
+  width: min(1200px, calc(100% - 2rem));
+  margin: 2rem auto;
 }
 
 h1 {
+  margin: 0 0 1rem;
   font-size: 2rem;
 }
 
-li {
-  margin: 0.5rem 0;
+.input-panel {
+  display: grid;
+  gap: 0.5rem;
+  font-weight: 600;
+}
+
+textarea {
+  min-height: 16rem;
+  resize: vertical;
+  padding: 0.75rem;
+  border: 1px solid #d1d5db;
+  font: 0.9rem/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color: inherit;
+  background: transparent;
+}
+
+.summary {
+  margin: 1rem 0;
+  min-height: 1.5rem;
+}
+
+.columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  align-items: start;
+}
+
+.column {
+  border: 1px solid #d1d5db;
+  padding: 1rem;
+  min-width: 0;
+}
+
+h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.2rem;
+}
+
+.column p {
+  margin: 0 0 1rem;
+}
+
+dl {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0 0 1rem;
+}
+
+dl div {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+dt {
+  color: #6b7280;
+}
+
+dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.output-list {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.output-item {
+  min-height: 2rem;
+  padding: 0.75rem;
+  border: 1px solid #e5e7eb;
+}
+
+.output-item p {
+  margin: 0;
+}
+
+.output-item img {
+  max-width: 100%;
+  display: block;
+}
+
+.pending {
+  color: #6b7280;
+}
+
+@media (max-width: 900px) {
+  .columns {
+    grid-template-columns: 1fr;
+  }
 }

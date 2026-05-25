@@ -8,4 +8,9 @@ npm run build
 npm run test:browser
 ```
 
-`vite.config.ts` imports `@scarf/ts-pattern-swc-plugin/transform` from the installed package and runs it before React's Vite plugin. The browser test fails on page errors so runtime regressions such as missing React imports are caught.
+The page accepts a JSON textarea of Result records to parse and render, then compares three async benchmark columns:
+
+- `ts-pattern AS-IS`
+- `ts-pattern with swc-plugin`
+- `plain JS with switch/if`
+
