@@ -43,11 +43,13 @@ export const parseRecords = (source: string): Result[] => {
   if (!Array.isArray(value)) {
     throw new Error('Input must be a JSON array of Result records')
   }
+  if (value.length === 0) {
+    throw new Error('Input must contain at least one Result record')
+  }
   return value.map(parseResult)
 }
 
-export const iterationsFor = (recordCount: number) =>
-  Math.max(1_000, Math.floor(100_000 / Math.max(1, recordCount)))
+export const benchmarkOperations = 100_000
 
 const nextFrame = async () => {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
@@ -56,35 +58,28 @@ const nextFrame = async () => {
 const checksumFor = (row: RenderedResult) => row.text.length
 
 export const benchmarkRenderer = async ({
-  iterations,
   records,
   render,
 }: {
-  iterations: number
   records: Result[]
   render: Renderer
 }): Promise<BenchmarkResult> => {
   await nextFrame()
 
-  let output: RenderedResult[] = []
+  const output = records.map(render)
   let checksum = 0
   const startedAt = performance.now()
 
-  for (let iteration = 0; iteration < iterations; iteration += 1) {
-    output = records.map(render)
-    for (const row of output) {
-      checksum += checksumFor(row)
-    }
+  for (let operation = 0; operation < benchmarkOperations; operation += 1) {
+    checksum += checksumFor(render(records[operation % records.length]))
   }
 
   const elapsedMs = performance.now() - startedAt
-  const operations = records.length * iterations
 
   return {
     elapsedMs,
-    iterations,
-    operations,
-    operationsPerSecond: elapsedMs === 0 ? 0 : (operations / elapsedMs) * 1000,
+    operations: benchmarkOperations,
+    operationsPerSecond: elapsedMs === 0 ? 0 : (benchmarkOperations / elapsedMs) * 1000,
     checksum,
     output,
   }

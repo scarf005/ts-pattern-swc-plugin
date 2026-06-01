@@ -9,6 +9,10 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
 
   await page.goto('/', { waitUntil: 'networkidle' })
 
+  await expect(page.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/scarf005/ts-pattern-swc-plugin')
+  await expect(page.getByRole('link', { name: 'Playground' })).toHaveAttribute('href', 'https://ts-pattern-swc-plugin.pages.dev/')
+  await expect(page.locator('.layout')).toHaveCSS('grid-template-columns', /.+ .+/)
+
   await expect(page.getByRole('heading', { name: 'ts-pattern AS-IS' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'ts-pattern with swc-plugin' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'plain JS with switch/if' })).toBeVisible()
@@ -16,12 +20,16 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   await expect(page.getByRole('textbox', { name: 'plain switch if code' })).toContainText('switch (result.type)')
   await expect(page.locator('.token-keyword')).not.toHaveCount(0)
   await expect(page.locator('.token-jsx')).not.toHaveCount(0)
+  await expect(page.locator('.json-key')).not.toHaveCount(0)
+  await expect(page.locator('.json-string')).not.toHaveCount(0)
+
   const comparison = page.getByLabel('benchmark comparison')
   await expect(comparison.getByText('Hello from ts-pattern')).toHaveCount(3)
   await expect(comparison.getByText('Oups! An error occured')).toHaveCount(3)
   await expect(comparison.getByRole('img')).toHaveCount(3)
+  await expect(comparison.getByText(/\d+\.\d% (?:faster|slower) than ts-pattern/)).not.toHaveCount(0)
 
-  await page.getByLabel('JSON Result records to parse and render').fill(
+  await page.getByLabel('Input').fill(
     JSON.stringify(
       [
         { type: 'ok', data: { type: 'text', content: 'Edited text' } },
@@ -33,6 +41,7 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   )
 
   await expect(page.getByRole('status')).toContainText('Parsed 2 records')
+  await expect(page.getByRole('status')).toContainText('100,000 operations')
   await expect(comparison.getByText('Edited text')).toHaveCount(3)
   await expect(comparison.getByText('Oups! An error occured')).toHaveCount(3)
   await expect(comparison.getByText('Throughput')).toHaveCount(3)

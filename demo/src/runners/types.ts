@@ -17,7 +17,6 @@ export type Renderer = (result: Result) => RenderedResult
 
 export type BenchmarkResult = {
   elapsedMs: number
-  iterations: number
   operations: number
   operationsPerSecond: number
   checksum: number
