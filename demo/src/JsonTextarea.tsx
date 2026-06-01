@@ -5,10 +5,11 @@ type JsonToken = {
   text: string
 }
 
-const jsonTokenPattern = /("(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|\b(?:true|false|null)\b|[{}[\],:])/gi
+const jsonTokenPattern = /(\/\/.*|\/\*.*?\*\/|"(?:\\.|[^"\\])*"(?=\s*:)|"(?:\\.|[^"\\])*"|-?\d+(?:\.\d+)?(?:e[+-]?\d+)?|\b(?:true|false|null)\b|[{}[\],:])/gi
 
 const jsonClassFor = (text: string) => {
-  if (/^"/.test(text)) return text.match(/^"(?:\\.|[^"\\])*"$/) && text.endsWith('"') && text.match(/"(?=\s*$)/) ? 'json-string' : 'json-string'
+  if (text.startsWith('//') || text.startsWith('/*')) return 'json-comment'
+  if (/^"/.test(text)) return 'json-string'
   if (/^-?\d/.test(text)) return 'json-number'
   if (/^(true|false)$/i.test(text)) return 'json-boolean'
   if (/^null$/i.test(text)) return 'json-null'
@@ -35,16 +36,18 @@ const jsonTokensFor = (line: string) => {
 export const JsonTextarea = ({
   label,
   onChange,
+  readOnly = false,
   value,
 }: {
   label: string
-  onChange: (value: string) => void
+  onChange?: (value: string) => void
+  readOnly?: boolean
   value: string
 }) => {
   const highlightRef = useRef<HTMLPreElement>(null)
 
   return (
-    <div className="json-input">
+    <div className={readOnly ? 'json-input readonly' : 'json-input'}>
       <pre aria-hidden="true" className="json-highlight" ref={highlightRef}>
         <code>
           {value.split('\n').map((line, lineIndex) => (
@@ -63,7 +66,8 @@ export const JsonTextarea = ({
         className="json-textarea"
         spellCheck={false}
         value={value}
-        onChange={(event) => onChange(event.currentTarget.value)}
+        readOnly={readOnly}
+        onChange={(event) => onChange?.(event.currentTarget.value)}
         onScroll={(event) => {
           if (highlightRef.current) {
             highlightRef.current.scrollTop = event.currentTarget.scrollTop

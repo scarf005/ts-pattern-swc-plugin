@@ -17,33 +17,32 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   await expect(page.getByRole('heading', { name: 'ts-pattern with swc-plugin' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'plain JS with switch/if' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: 'ts-pattern code' })).toContainText("import { match, P } from 'ts-pattern'")
+  await expect(page.getByRole('textbox', { name: 'ts-pattern code' })).not.toContainText('type Data')
   await expect(page.getByRole('textbox', { name: 'plain switch if code' })).toContainText('switch (result.type)')
+  await expect(page.getByRole('textbox', { name: 'plain switch if code' })).not.toContainText('type Result')
   await expect(page.locator('.token-keyword')).not.toHaveCount(0)
   await expect(page.locator('.token-jsx')).not.toHaveCount(0)
+  await expect(page.locator('.json-comment')).not.toHaveCount(0)
   await expect(page.locator('.json-key')).not.toHaveCount(0)
   await expect(page.locator('.json-string')).not.toHaveCount(0)
 
   const comparison = page.getByLabel('benchmark comparison')
-  await expect(comparison.getByText('Hello from ts-pattern')).toHaveCount(3)
-  await expect(comparison.getByText('Oups! An error occured')).toHaveCount(3)
-  await expect(comparison.getByRole('img')).toHaveCount(3)
+  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Hello from ts-pattern')
+  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Oups! An error occured')
+  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('<img src=')
   await expect(comparison.getByText(/\d+\.\d% (?:faster|slower) than ts-pattern/)).not.toHaveCount(0)
+  await expect(comparison.getByText(/ops\/s \(\d+\.\d% (?:faster|slower) than ts-pattern\)/)).not.toHaveCount(0)
 
-  await page.getByLabel('Input').fill(
-    JSON.stringify(
-      [
-        { type: 'ok', data: { type: 'text', content: 'Edited text' } },
-        { type: 'error', error: { message: 'Still hidden by snippet' } },
-      ],
-      null,
-      2,
-    ),
-  )
+  await page.getByLabel('Input').fill(`[
+    // JSONC input
+    { "type": "ok", "data": { "type": "text", "content": "Edited text" } },
+    { "type": "error", "error": { "message": "Still hidden by snippet" } },
+  ]`)
 
   await expect(page.getByRole('status')).toContainText('Parsed 2 records')
   await expect(page.getByRole('status')).toContainText('100,000 operations')
-  await expect(comparison.getByText('Edited text')).toHaveCount(3)
-  await expect(comparison.getByText('Oups! An error occured')).toHaveCount(3)
+  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Edited text')
+  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Oups! An error occured')
   await expect(comparison.getByText('Throughput')).toHaveCount(3)
   expect(errors).toEqual([])
 })

@@ -109,8 +109,13 @@ nav svg {
   color: #1d4ed8;
 }
 
-.json-punctuation {
+.json-punctuation,
+.json-comment {
   color: #6b7280;
+}
+
+.readonly .json-textarea {
+  cursor: default;
 }
 
 .summary {
@@ -207,26 +212,6 @@ dd {
 
 .slower {
   color: #dc2626;
-}
-
-.output-list {
-  display: grid;
-  gap: 0.5rem;
-}
-
-.output-item {
-  min-height: 2rem;
-  padding: 0.75rem;
-  border: 1px solid #e5e7eb;
-}
-
-.output-item p {
-  margin: 0;
-}
-
-.output-item img {
-  max-width: 100%;
-  display: block;
 }
 
 .pending {

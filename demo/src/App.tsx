@@ -57,9 +57,12 @@ const throughputComparison = (runner: RunnerState, baseline?: BenchmarkResult) =
   const percent = Math.abs((ratio - 1) * 100)
   return {
     className: ratio >= 1 ? 'faster' : 'slower',
-    text: `${percent.toFixed(1)}% ${ratio >= 1 ? 'faster' : 'slower'} than ts-pattern`,
+    text: `(${percent.toFixed(1)}% ${ratio >= 1 ? 'faster' : 'slower'} than ts-pattern)`,
   }
 }
+
+const resultTextFor = (baseline?: BenchmarkResult) =>
+  baseline ? JSON.stringify(baseline.output.map(({ text }) => text), null, 2) : ''
 
 function App() {
   const [source, setSource] = useState(defaultInput)
@@ -113,8 +116,8 @@ function App() {
         <h1>ts-pattern SWC plugin benchmark</h1>
         <nav aria-label="links">
           <a href={repositoryUrl} rel="noreferrer" target="_blank">
-            <svg aria-hidden="true" viewBox="0 0 16 16">
-              <path d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38v-1.49c-2.25.49-2.73-.96-2.73-.96-.36-.93-.9-1.18-.9-1.18-.74-.5.06-.49.06-.49.81.06 1.24.84 1.24.84.73 1.24 1.9.88 2.36.67.07-.52.28-.88.51-1.08-1.79-.2-3.68-.9-3.68-3.99 0-.88.31-1.6.83-2.17-.08-.2-.36-1.03.08-2.14 0 0 .68-.22 2.22.83A7.66 7.66 0 0 1 8 2.78c.69 0 1.37.09 2.02.27 1.54-1.05 2.22-.83 2.22-.83.44 1.11.16 1.94.08 2.14.52.57.83 1.29.83 2.17 0 3.1-1.89 3.78-3.69 3.98.29.25.55.74.55 1.5v2.2c0 .21.15.46.56.38A8 8 0 0 0 8 0Z" />
+            <svg aria-hidden="true" viewBox="0 0 98 96">
+              <path d="M48.85 0C21.9 0 0 22 0 49.1c0 21.7 14 40.1 33.4 46.6 2.45.45 3.35-1.06 3.35-2.38 0-1.17-.04-4.26-.07-8.36-13.59 2.97-16.45-6.58-16.45-6.58-2.22-5.66-5.43-7.17-5.43-7.17-4.44-3.05.34-2.99.34-2.99 4.9.35 7.48 5.06 7.48 5.06 4.36 7.5 11.43 5.33 14.22 4.08.44-3.17 1.7-5.33 3.1-6.56-10.85-1.24-22.26-5.45-22.26-24.26 0-5.36 1.9-9.74 5.03-13.17-.5-1.24-2.18-6.23.48-13 0 0 4.11-1.32 13.45 5.03a46.5 46.5 0 0 1 24.48 0c9.34-6.35 13.44-5.03 13.44-5.03 2.67 6.77.99 11.76.49 13 3.13 3.43 5.02 7.81 5.02 13.17 0 18.86-11.43 23-22.32 24.22 1.75 1.52 3.32 4.52 3.32 9.11 0 6.58-.06 11.88-.06 13.5 0 1.32.88 2.86 3.36 2.37C84 89.17 98 70.77 98 49.1 98 22 76.1 0 48.85 0Z" />
             </svg>
             GitHub
           </a>
@@ -161,7 +164,7 @@ function App() {
                           <dt>Throughput</dt>
                           <dd>
                             <span>{formatRate(runner.result.operationsPerSecond)}</span>
-                            {comparison && <span className={comparison.className}>{comparison.text}</span>}
+                            {comparison && <span className={comparison.className}> {comparison.text}</span>}
                           </dd>
                         </div>
                         <div>
@@ -169,13 +172,6 @@ function App() {
                           <dd>{runner.result.operations.toLocaleString()}</dd>
                         </div>
                       </dl>
-                      <div className="output-list">
-                        {runner.result.output.map(({ html, text }, index) => (
-                          <div className="output-item" key={`${runner.id}-${index}-${text}`}>
-                            {html}
-                          </div>
-                        ))}
-                      </div>
                     </>
                   ) : (
                     <p className="pending">Waiting for valid JSON input.</p>
@@ -184,6 +180,11 @@ function App() {
               )
             })}
           </section>
+
+          <label className="input-panel">
+            <span>Result</span>
+            <JsonTextarea label="Result" readOnly value={resultTextFor(baseline)} />
+          </label>
         </section>
       </div>
     </main>
