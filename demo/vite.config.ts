@@ -11,11 +11,7 @@ const tsPatternSwcPlugin = (): Plugin => {
     async transform(code, id) {
       const filename = id.split('?')[0]
       const normalizedFilename = normalizePath(filename)
-      if (
-        !/\.[cm]?tsx?$/.test(filename) ||
-        filename.includes('/node_modules/') ||
-        normalizedFilename.endsWith('/src/runners/ts-pattern-as-is.tsx')
-      ) {
+      if (!normalizedFilename.endsWith('/src/runners/ts-pattern-swc.tsx')) {
         return null
       }
 

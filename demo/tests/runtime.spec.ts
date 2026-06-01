@@ -7,6 +7,10 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
     if (message.type() === 'error') errors.push(message.text())
   })
 
+  const appModule = await page.request.get('/src/App.tsx')
+  await expect(appModule).toBeOK()
+  await expect(await appModule.text()).toContain('export default App')
+
   await page.goto('/', { waitUntil: 'networkidle' })
 
   await expect(page.getByRole('link', { name: 'GitHub' })).toHaveAttribute('href', 'https://github.com/scarf005/ts-pattern-swc-plugin')
