@@ -95,7 +95,15 @@ export const parseRecords = (source: string): Result[] => {
   return value.map(parseResult)
 }
 
-export const benchmarkOperations = 100_000
+export const defaultBenchmarkOperations = 100_000
+
+export const parseOperations = (source: string) => {
+  const operations = Number(source.replaceAll(',', '').trim())
+  if (!Number.isInteger(operations) || operations <= 0) {
+    throw new Error('Operations must be a positive integer')
+  }
+  return operations
+}
 
 const nextFrame = async () => {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
@@ -104,9 +112,11 @@ const nextFrame = async () => {
 const checksumFor = (row: RenderedResult) => row.text.length
 
 export const benchmarkRenderer = async ({
+  operations,
   records,
   render,
 }: {
+  operations: number
   records: Result[]
   render: Renderer
 }): Promise<BenchmarkResult> => {
@@ -116,7 +126,7 @@ export const benchmarkRenderer = async ({
   let checksum = 0
   const startedAt = performance.now()
 
-  for (let operation = 0; operation < benchmarkOperations; operation += 1) {
+  for (let operation = 0; operation < operations; operation += 1) {
     checksum += checksumFor(render(records[operation % records.length]))
   }
 
@@ -124,8 +134,8 @@ export const benchmarkRenderer = async ({
 
   return {
     elapsedMs,
-    operations: benchmarkOperations,
-    operationsPerSecond: elapsedMs === 0 ? 0 : (benchmarkOperations / elapsedMs) * 1000,
+    operations,
+    operationsPerSecond: elapsedMs === 0 ? 0 : (operations / elapsedMs) * 1000,
     checksum,
     output,
   }

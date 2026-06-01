@@ -49,10 +49,33 @@ nav svg {
   gap: 1rem;
 }
 
+.controls {
+  display: flex;
+  align-items: end;
+  gap: 0.75rem;
+}
+
+.controls label,
 .input-panel {
   display: grid;
   gap: 0.5rem;
   font-weight: 600;
+}
+
+.controls input {
+  width: 10rem;
+  padding: 0.5rem;
+  border: 1px solid #d1d5db;
+  font: inherit;
+}
+
+button {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #d1d5db;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
 }
 
 .json-input {
@@ -112,6 +135,17 @@ nav svg {
 .json-punctuation,
 .json-comment {
   color: #6b7280;
+}
+
+.readonly {
+  min-height: 0;
+}
+
+.readonly .json-highlight,
+.readonly .json-textarea {
+  overflow: hidden;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 .readonly .json-textarea {

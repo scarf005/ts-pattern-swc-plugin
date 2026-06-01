@@ -17,6 +17,10 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   await expect(page.getByRole('link', { name: 'Playground' })).toHaveAttribute('href', 'https://ts-pattern-swc-plugin.pages.dev/')
   await expect(page.locator('.layout')).toHaveCSS('grid-template-columns', /.+ .+/)
 
+  await expect(page.getByLabel('Operations')).toHaveValue('100,000')
+  await expect(page.getByRole('status')).toContainText('Ready')
+  await page.getByRole('button', { name: 'Run' }).click()
+
   await expect(page.getByRole('heading', { name: 'ts-pattern AS-IS' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'ts-pattern with swc-plugin' })).toBeVisible()
   await expect(page.getByRole('heading', { name: 'plain JS with switch/if' })).toBeVisible()
@@ -35,17 +39,22 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toContainText('Hello from ts-pattern')
   await expect(page.getByRole('textbox', { name: 'ts-pattern with swc-plugin Result' })).toContainText('Oups! An error occured')
   await expect(page.getByRole('textbox', { name: 'plain JS with switch/if Result' })).toContainText('<img src=')
+  await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toHaveCSS('white-space', 'pre-wrap')
+  await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toHaveJSProperty('scrollTop', 0)
+  await expect(comparison.locator('.json-input.readonly').first()).toHaveJSProperty('clientHeight', await comparison.locator('.json-input.readonly').first().evaluate((element) => element.scrollHeight))
   await expect(comparison.getByText(/\d+\.\d% (?:faster|slower) than ts-pattern/)).not.toHaveCount(0)
   await expect(comparison.getByText(/ops\/s \(\d+\.\d% (?:faster|slower) than ts-pattern\)/)).not.toHaveCount(0)
 
+  await page.getByLabel('Operations').fill('12,345')
   await page.getByLabel('Input').fill(`[
     // JSONC input
     { "type": "ok", "data": { "type": "text", "content": "Edited text" } },
     { "type": "error", "error": { "message": "Still hidden by snippet" } },
   ]`)
+  await page.getByRole('button', { name: 'Run' }).click()
 
   await expect(page.getByRole('status')).toContainText('Parsed 2 records')
-  await expect(page.getByRole('status')).toContainText('100,000 operations')
+  await expect(page.getByRole('status')).toContainText('12,345 operations')
   await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toContainText('Edited text')
   await expect(page.getByRole('textbox', { name: 'ts-pattern with swc-plugin Result' })).toContainText('Oups! An error occured')
   await expect(page.getByRole('textbox', { name: 'plain JS with switch/if Result' })).toContainText('Edited text')

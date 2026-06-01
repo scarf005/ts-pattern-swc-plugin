@@ -33,6 +33,9 @@ const jsonTokensFor = (line: string) => {
   return tokens
 }
 
+const rowsFor = (value: string) =>
+  value.split('\n').reduce((rows, line) => rows + Math.max(1, Math.ceil(line.length / 44)), 0)
+
 export const JsonTextarea = ({
   label,
   onChange,
@@ -45,9 +48,10 @@ export const JsonTextarea = ({
   value: string
 }) => {
   const highlightRef = useRef<HTMLPreElement>(null)
+  const fitHeight = readOnly ? `${Math.max(3, rowsFor(value)) * 1.4 + 1.5}rem` : undefined
 
   return (
-    <div className={readOnly ? 'json-input readonly' : 'json-input'}>
+    <div className={readOnly ? 'json-input readonly' : 'json-input'} style={{ height: fitHeight }}>
       <pre aria-hidden="true" className="json-highlight" ref={highlightRef}>
         <code>
           {value.split('\n').map((line, lineIndex) => (

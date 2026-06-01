@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
-import { benchmarkRenderer, defaultInput, parseRecords } from './benchmark'
+import { useState } from 'react'
+import { benchmarkRenderer, defaultBenchmarkOperations, defaultInput, parseOperations, parseRecords } from './benchmark'
 import { CodeBox } from './CodeBox'
 import { JsonTextarea } from './JsonTextarea'
 import { renderWithPlainSwitch } from './runners/plain'
@@ -20,7 +20,8 @@ type RunnerState = Runner & {
 }
 
 type BenchmarkState =
-  | { status: 'running'; parseMs?: number; records?: number; runners: RunnerState[] }
+  | { status: 'idle'; runners: RunnerState[] }
+  | { status: 'running'; runners: RunnerState[] }
   | { status: 'done'; parseMs: number; records: number; runners: RunnerState[] }
   | { status: 'error'; message: string; runners: RunnerState[] }
 
@@ -45,6 +46,7 @@ const runners: Runner[] = [
   },
 ]
 
+const idleState = (): BenchmarkState => ({ status: 'idle', runners })
 const runningState = (): BenchmarkState => ({ status: 'running', runners })
 
 const formatMs = (value: number) => `${value.toFixed(2)} ms`
@@ -66,47 +68,37 @@ const resultTextFor = (result?: BenchmarkResult) =>
 
 function App() {
   const [source, setSource] = useState(defaultInput)
-  const [state, setState] = useState<BenchmarkState>(() => runningState())
+  const [operationsText, setOperationsText] = useState(defaultBenchmarkOperations.toLocaleString())
+  const [state, setState] = useState<BenchmarkState>(() => idleState())
 
-  useEffect(() => {
-    let cancelled = false
+  const runBenchmark = async () => {
+    setState(runningState())
+    try {
+      const operations = parseOperations(operationsText)
+      const parseStartedAt = performance.now()
+      const records = parseRecords(source)
+      const parseMs = performance.now() - parseStartedAt
 
-    const timeout = window.setTimeout(async () => {
-      setState(runningState())
-      try {
-        const parseStartedAt = performance.now()
-        const records = parseRecords(source)
-        const parseMs = performance.now() - parseStartedAt
+      const results = await Promise.all(
+        runners.map(async (runner) => ({
+          ...runner,
+          result: await benchmarkRenderer({
+            operations,
+            records,
+            render: runner.render,
+          }),
+        })),
+      )
 
-        const results = await Promise.all(
-          runners.map(async (runner) => ({
-            ...runner,
-            result: await benchmarkRenderer({
-              records,
-              render: runner.render,
-            }),
-          })),
-        )
-
-        if (!cancelled) {
-          setState({ status: 'done', parseMs, records: records.length, runners: results })
-        }
-      } catch (error) {
-        if (!cancelled) {
-          setState({
-            status: 'error',
-            message: error instanceof Error ? error.message : String(error),
-            runners,
-          })
-        }
-      }
-    }, 150)
-
-    return () => {
-      cancelled = true
-      window.clearTimeout(timeout)
+      setState({ status: 'done', parseMs, records: records.length, runners: results })
+    } catch (error) {
+      setState({
+        status: 'error',
+        message: error instanceof Error ? error.message : String(error),
+        runners,
+      })
     }
-  }, [source])
+  }
 
   const baseline = state.runners.find((runner) => runner.id === 'ts-pattern-as-is')?.result
 
@@ -127,6 +119,19 @@ function App() {
 
       <div className="layout">
         <section className="left-pane">
+          <div className="controls">
+            <label>
+              <span>Operations</span>
+              <input
+                aria-label="Operations"
+                inputMode="numeric"
+                value={operationsText}
+                onChange={(event) => setOperationsText(event.currentTarget.value)}
+              />
+            </label>
+            <button type="button" onClick={() => void runBenchmark()}>Run</button>
+          </div>
+
           <label className="input-panel">
             <span>Input</span>
             <JsonTextarea label="Input" value={source} onChange={setSource} />
@@ -140,6 +145,7 @@ function App() {
 
         <section className="right-pane">
           <p className="summary" role="status">
+            {state.status === 'idle' && 'Ready.'}
             {state.status === 'running' && 'Running benchmark asynchronously…'}
             {state.status === 'done' &&
               `Parsed ${state.records} records in ${formatMs(state.parseMs)}. Each column ran ${state.runners[0]?.result?.operations.toLocaleString()} operations.`}
@@ -178,7 +184,7 @@ function App() {
                       </label>
                     </>
                   ) : (
-                    <p className="pending">Waiting for valid JSON input.</p>
+                    <p className="pending">Run benchmark.</p>
                   )}
                 </article>
               )
