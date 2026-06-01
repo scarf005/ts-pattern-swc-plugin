@@ -61,8 +61,8 @@ const throughputComparison = (runner: RunnerState, baseline?: BenchmarkResult) =
   }
 }
 
-const resultTextFor = (baseline?: BenchmarkResult) =>
-  baseline ? JSON.stringify(baseline.output.map(({ text }) => text), null, 2) : ''
+const resultTextFor = (result?: BenchmarkResult) =>
+  result ? JSON.stringify(result.output.map(({ text }) => text), null, 2) : ''
 
 function App() {
   const [source, setSource] = useState(defaultInput)
@@ -172,6 +172,10 @@ function App() {
                           <dd>{runner.result.operations.toLocaleString()}</dd>
                         </div>
                       </dl>
+                      <label className="input-panel">
+                        <span>Result</span>
+                        <JsonTextarea label={`${runner.title} Result`} readOnly value={resultTextFor(runner.result)} />
+                      </label>
                     </>
                   ) : (
                     <p className="pending">Waiting for valid JSON input.</p>
@@ -180,11 +184,6 @@ function App() {
               )
             })}
           </section>
-
-          <label className="input-panel">
-            <span>Result</span>
-            <JsonTextarea label="Result" readOnly value={resultTextFor(baseline)} />
-          </label>
         </section>
       </div>
     </main>

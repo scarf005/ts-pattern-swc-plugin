@@ -31,9 +31,10 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
   await expect(page.locator('.json-string')).not.toHaveCount(0)
 
   const comparison = page.getByLabel('benchmark comparison')
-  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Hello from ts-pattern')
-  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Oups! An error occured')
-  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('<img src=')
+  await expect(comparison.getByRole('textbox', { name: /Result/ })).toHaveCount(3)
+  await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toContainText('Hello from ts-pattern')
+  await expect(page.getByRole('textbox', { name: 'ts-pattern with swc-plugin Result' })).toContainText('Oups! An error occured')
+  await expect(page.getByRole('textbox', { name: 'plain JS with switch/if Result' })).toContainText('<img src=')
   await expect(comparison.getByText(/\d+\.\d% (?:faster|slower) than ts-pattern/)).not.toHaveCount(0)
   await expect(comparison.getByText(/ops\/s \(\d+\.\d% (?:faster|slower) than ts-pattern\)/)).not.toHaveCount(0)
 
@@ -45,8 +46,9 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
 
   await expect(page.getByRole('status')).toContainText('Parsed 2 records')
   await expect(page.getByRole('status')).toContainText('100,000 operations')
-  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Edited text')
-  await expect(page.getByRole('textbox', { name: 'Result' })).toContainText('Oups! An error occured')
+  await expect(page.getByRole('textbox', { name: 'ts-pattern AS-IS Result' })).toContainText('Edited text')
+  await expect(page.getByRole('textbox', { name: 'ts-pattern with swc-plugin Result' })).toContainText('Oups! An error occured')
+  await expect(page.getByRole('textbox', { name: 'plain JS with switch/if Result' })).toContainText('Edited text')
   await expect(comparison.getByText('Throughput')).toHaveCount(3)
   expect(errors).toEqual([])
 })
