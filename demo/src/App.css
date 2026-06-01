@@ -29,11 +29,63 @@ textarea {
   min-height: 1.5rem;
 }
 
+.code-grid,
 .columns {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 1rem;
   align-items: start;
+}
+
+.code-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 1rem;
+}
+
+.columns {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.codebox {
+  overflow: auto;
+  min-height: 22rem;
+  max-height: 28rem;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid #d1d5db;
+  background: #f9fafb;
+  color: #111827;
+  font: 0.85rem/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: left;
+  white-space: pre;
+}
+
+.codebox:focus {
+  outline: 2px solid #2563eb;
+  outline-offset: 2px;
+}
+
+.token-keyword {
+  color: #7c3aed;
+}
+
+.token-string {
+  color: #047857;
+}
+
+.token-jsx {
+  color: #dc2626;
+}
+
+.token-symbol {
+  color: #1d4ed8;
+}
+
+.token-property {
+  color: #b45309;
+}
+
+.token-comment {
+  color: #6b7280;
 }
 
 .column {
@@ -97,6 +149,7 @@ dd {
 }
 
 @media (max-width: 900px) {
+  .code-grid,
   .columns {
     grid-template-columns: 1fr;
   }

@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react'
 import { benchmarkRenderer, defaultInput, iterationsFor, parseRecords } from './benchmark'
+import { CodeBox } from './CodeBox'
 import { renderWithPlainSwitch } from './runners/plain'
 import { renderWithTsPatternAsIs } from './runners/ts-pattern-as-is'
 import { renderWithTsPatternSwc } from './runners/ts-pattern-swc'
 import type { BenchmarkResult, Renderer } from './runners/types'
+import { plainSwitchCode, tsPatternCode } from './snippets'
 import './App.css'
 
 type Runner = {
@@ -110,6 +112,11 @@ function App() {
           `Parsed ${state.records} records in ${formatMs(state.parseMs)}. Each column ran ${state.runners[0]?.result?.iterations.toLocaleString()} iterations.`}
         {state.status === 'error' && `Parse error: ${state.message}`}
       </p>
+
+      <section className="code-grid" aria-label="matching code">
+        <CodeBox code={tsPatternCode} label="ts-pattern code" />
+        <CodeBox code={plainSwitchCode} label="plain switch if code" />
+      </section>
 
       <section className="columns" aria-label="benchmark comparison">
         {state.runners.map((runner) => (

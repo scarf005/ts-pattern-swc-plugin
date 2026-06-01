@@ -1,0 +1,56 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 25
+          cache: npm
+          cache-dependency-path: |
+            plugin/package-lock.json
+            demo/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            plugin/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('plugin/Cargo.lock') }}
+          restore-keys: |
+            cargo-${{ runner.os }}-
+
+      - run: rustup target add wasm32-wasip1
+
+      - run: npm ci
+        working-directory: plugin
+
+      - run: cargo test --manifest-path plugin/Cargo.toml
+
+      - run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+
+      - run: npm pack --dry-run --ignore-scripts
+        working-directory: plugin
+
+      - run: npm ci
+        working-directory: demo
+
+      - run: npx playwright install --with-deps chromium
+        working-directory: demo
+
+      - run: npm run build
+        working-directory: demo
+
+      - run: npm run lint
+        working-directory: demo
+
+      - run: npm run test:browser
+        working-directory: demo
