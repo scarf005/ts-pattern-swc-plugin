@@ -104,6 +104,11 @@ type TransformOptions = {
 }
 type Theme = "white" | "dark"
 type PatternId = typeof commonPatterns[number]["id"] | "custom"
+type RunEntry = {
+  input: string
+  output: string
+  rendered: unknown
+}
 
 type TypeScriptEditorProps = {
   value: string
@@ -163,6 +168,7 @@ const status = signal("Compiling")
 const iterations = signal("100000")
 const benchmarkStatus = signal("")
 const runStatus = signal("")
+const runEntries = signal<RunEntry[]>([])
 const theme = signal(getInitialTheme())
 const selectedPattern = signal<PatternId>(DEFAULT_PATTERN?.id ?? "custom")
 let compileVersion = 0
@@ -238,9 +244,12 @@ const compileSource = async (code: string) => {
   }
 }
 
+const isHtmlLike = (value: string) => /<\w[\s\S]*>/.test(value)
+
 const resetOutputs = () => {
   benchmarkStatus.value = ""
   runStatus.value = ""
+  runEntries.value = []
 }
 
 const pushPath = (path: string) => {
@@ -273,6 +282,7 @@ const defaultBenchmarkInputs = [
 
 const runCurrent = async () => {
   runStatus.value = "Running"
+  runEntries.value = []
   try {
     const code = await transformSource({
       code: source.value,
@@ -283,10 +293,17 @@ const runCurrent = async () => {
     const inputs: unknown[] = module.inputs?.length
       ? module.inputs
       : defaultBenchmarkInputs
-    runStatus.value = inputs
-      .map((input) =>
-        `${formatValue(input)} => ${formatValue(module.run(input))}`
-      )
+    const entries = inputs.map((input) => {
+      const rendered = module.run(input)
+      return {
+        input: formatValue(input),
+        output: formatValue(rendered),
+        rendered,
+      }
+    })
+    runEntries.value = entries
+    runStatus.value = entries
+      .map((entry) => `${entry.input} => ${entry.output}`)
       .join("\n")
   } catch (error) {
     runStatus.value = error instanceof Error ? error.message : String(error)
@@ -558,6 +575,28 @@ export const App = () => (
       </label>
     </section>
     {runStatus.value && <pre class="run-output">{runStatus.value}</pre>}
+    {runEntries.value.length > 0 && (
+      <section class="rendered-results">
+        <h2>Rendered result</h2>
+        <div class="rendered-results-grid">
+          {runEntries.value.map((entry, index) => (
+            <article class="rendered-result-card" key={`${index}-${entry.input}`}>
+              <pre>{entry.input}</pre>
+              {typeof entry.rendered === "string"
+                ? isHtmlLike(entry.rendered)
+                  ? (
+                    <div
+                      class="rendered-result-preview"
+                      dangerouslySetInnerHTML={{ __html: entry.rendered }}
+                    />
+                  )
+                  : <div class="rendered-result-preview">{entry.rendered}</div>
+                : <div class="rendered-result-preview">{entry.output}</div>}
+            </article>
+          ))}
+        </div>
+      </section>
+    )}
     {benchmarkStatus.value && (
       <pre class="benchmark-output">{benchmarkStatus.value}</pre>
     )}
