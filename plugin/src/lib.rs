@@ -2609,6 +2609,23 @@ export const render = (result: { type: "error" } | { type: "ok"; data: { type: "
     }
 
     #[test]
+    fn caches_nested_object_discriminants_without_repeating_parent_guards() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+export const render = (result: { type: "error" } | { type: "ok"; data: { type: "img"; src: string } } | { type: "ok"; data: { type: "text"; content: string } }) => {
+  const html = match(result).with({ type: "error" }, () => "error").with({ type: "ok", data: { type: "text" } }, ({ data }) => data.content).with({ type: "ok", data: { type: "img", src: P.select() } }, (src) => src).exhaustive();
+  return html;
+};"#,
+        );
+
+        assert!(output.contains("const _tsPatternData = result.data"), "{output}");
+        assert!(output.contains("switch(_tsPatternData.type)"), "{output}");
+        assert!(output.contains("html = result.data.content"), "{output}");
+        assert!(output.contains("html = result.data.src"), "{output}");
+        assert!(!output.contains("result !== null && typeof result === \"object\" && \"data\" in result && result.data !== null"), "{output}");
+    }
+
+    #[test]
     fn emits_ternary_for_object_pattern() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
