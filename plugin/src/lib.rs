@@ -64,6 +64,11 @@ impl VisitMut for TsPatternTransformer {
         }
     }
 
+    fn visit_mut_block_stmt(&mut self, block: &mut BlockStmt) {
+        block.visit_mut_children_with(self);
+        block.stmts = self.rewrite_block_stmts(std::mem::take(&mut block.stmts));
+    }
+
     fn visit_mut_expr(&mut self, expr: &mut Expr) {
         expr.visit_mut_children_with(self);
 
@@ -341,15 +346,11 @@ impl TsPatternTransformer {
     }
 
     fn compile_arrow_match_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
-        if is_object_switch_chain(&chain) {
-            return self.compile_object_switch_stmts(chain);
-        }
-
         if chain.arms.iter().all(is_switchable_arm) {
             return Some(self.compile_switch_stmts(chain));
         }
 
-        self.compile_if_stmts(chain)
+        self.compile_return_stmts(chain)
     }
 
     fn compile_chain(&mut self, chain: MatchChain) -> Option<Expr> {
@@ -398,63 +399,97 @@ impl TsPatternTransformer {
         ]
     }
 
-    fn compile_object_switch_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
-        let key = common_object_switch_key(&chain)?;
+    fn compile_return_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
         let input_ident = private_ident!("_tsPatternInput");
         let input_expr = ident_expr(&input_ident);
-        let switch_expr = prop_access(input_expr.clone(), &key)?;
-        let mut cases = Vec::new();
+        let mut stmts = vec![const_stmt(input_ident, *chain.input)];
 
-        for arm in chain.arms {
+        stmts.extend(self.compile_return_body(input_expr, chain.arms, chain.fallback)?);
+        Some(stmts)
+    }
+
+    fn compile_return_body(
+        &mut self,
+        input_expr: Expr,
+        arms: Vec<MatchArm>,
+        fallback: Fallback,
+    ) -> Option<Vec<Stmt>> {
+        if let Some(path) = common_switch_path(&arms) {
+            return self.compile_return_path_switch(input_expr, arms, fallback, &path);
+        }
+
+        let mut stmts = Vec::new();
+
+        for arm in arms {
             let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
-            let handler_call = handler_result(arm.handler, handler_input);
-            let mut arm_patterns = arm.patterns.into_iter().peekable();
-
-            while let Some(pattern) = arm_patterns.next() {
-                let (_, value) = object_switch_pattern(&pattern)?;
-                let consequent = if arm_patterns.peek().is_some() {
-                    Vec::new()
-                } else {
-                    vec![return_stmt(handler_call.clone())]
-                };
-
-                cases.push(SwitchCase {
-                    span: DUMMY_SP,
-                    test: Some(Box::new(value.clone())),
-                    cons: consequent,
-                });
-            }
+            stmts.push(Stmt::If(IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
+                cons: Box::new(return_stmt(handler_result(arm.handler, handler_input))),
+                alt: None,
+            }));
         }
 
         let exhaustive_error_callee =
-            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
-        let fallback = fallback_stmts(
-            chain.fallback.clone(),
+            matches!(fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
+        stmts.extend(fallback_stmts(fallback, input_expr, exhaustive_error_callee));
+        Some(stmts)
+    }
+
+    fn compile_return_path_switch(
+        &mut self,
+        input_expr: Expr,
+        arms: Vec<MatchArm>,
+        fallback: Fallback,
+        path: &[PropName],
+    ) -> Option<Vec<Stmt>> {
+        let switch_expr = prop_access_path(input_expr.clone(), path)?;
+        let exhaustive_error_callee =
+            matches!(fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
+        let default_fallback = fallback_stmts(
+            fallback.clone(),
             input_expr.clone(),
             exhaustive_error_callee.clone(),
         );
+        let mut cases = Vec::new();
+
+        for (value, group) in group_arms_by_path(arms, path)? {
+            let (group_arms, group_fallback) = strip_group_arms(group, path, fallback.clone())?;
+            let cons = if group_arms.is_empty() {
+                fallback_stmts(
+                    group_fallback.clone(),
+                    input_expr.clone(),
+                    matches!(group_fallback, Fallback::Exhaustive)
+                        .then(|| self.exhaustive_error_callee()),
+                )
+            } else {
+                self.compile_return_body(input_expr.clone(), group_arms, group_fallback)?
+            };
+
+            cases.push(SwitchCase {
+                span: DUMMY_SP,
+                test: Some(Box::new(value)),
+                cons,
+            });
+        }
+
         cases.push(SwitchCase {
             span: DUMMY_SP,
             test: None,
-            cons: fallback,
+            cons: default_fallback.clone(),
         });
 
         Some(vec![
-            const_stmt(input_ident.clone(), *chain.input),
             Stmt::If(IfStmt {
                 span: DUMMY_SP,
                 test: Box::new(unary(
                     UnaryOp::Bang,
-                    object_switch_base_test(input_expr.clone(), &key)?,
+                    paren_expr(object_path_base_test(input_expr.clone(), path)?),
                 )),
                 cons: Box::new(Stmt::Block(BlockStmt {
                     span: DUMMY_SP,
                     ctxt: Default::default(),
-                    stmts: fallback_stmts(
-                        chain.fallback,
-                        input_expr.clone(),
-                        exhaustive_error_callee,
-                    ),
+                    stmts: default_fallback,
                 })),
                 alt: None,
             }),
@@ -466,7 +501,11 @@ impl TsPatternTransformer {
         ])
     }
 
-    fn compile_if_stmts(&mut self, chain: MatchChain) -> Option<Vec<Stmt>> {
+    fn compile_assign_match_stmts(
+        &mut self,
+        target: Expr,
+        chain: MatchChain,
+    ) -> Option<Vec<Stmt>> {
         let (input_expr, mut stmts) = if can_inline_input(&chain.input) {
             (*chain.input, Vec::new())
         } else {
@@ -477,24 +516,142 @@ impl TsPatternTransformer {
             )
         };
 
-        for arm in chain.arms {
-            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
-            stmts.push(Stmt::If(IfStmt {
-                span: DUMMY_SP,
-                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
-                cons: Box::new(return_stmt(handler_result(arm.handler, handler_input))),
-                alt: None,
-            }));
+        stmts.extend(self.compile_assign_body(target, input_expr, chain.arms, chain.fallback)?);
+        Some(stmts)
+    }
+
+    fn compile_assign_body(
+        &mut self,
+        target: Expr,
+        input_expr: Expr,
+        arms: Vec<MatchArm>,
+        fallback: Fallback,
+    ) -> Option<Vec<Stmt>> {
+        if let Some(path) = common_switch_path(&arms) {
+            return self.compile_assign_path_switch(target, input_expr, arms, fallback, &path);
         }
 
-        let exhaustive_error_callee =
-            matches!(chain.fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
-        stmts.extend(fallback_stmts(
-            chain.fallback,
-            input_expr,
-            exhaustive_error_callee,
-        ));
-        Some(stmts)
+        let mut current = fallback_stmt(
+            target.clone(),
+            fallback,
+            input_expr.clone(),
+            &mut || self.exhaustive_error_callee(),
+        );
+
+        for arm in arms.into_iter().rev() {
+            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
+            current = Stmt::If(IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
+                cons: Box::new(assign_stmt(
+                    target.clone(),
+                    handler_result(arm.handler, handler_input),
+                )),
+                alt: Some(Box::new(current)),
+            });
+        }
+
+        Some(vec![current])
+    }
+
+    fn compile_assign_path_switch(
+        &mut self,
+        target: Expr,
+        input_expr: Expr,
+        arms: Vec<MatchArm>,
+        fallback: Fallback,
+        path: &[PropName],
+    ) -> Option<Vec<Stmt>> {
+        let switch_expr = prop_access_path(input_expr.clone(), path)?;
+        let default_fallback = fallback_stmt(
+            target.clone(),
+            fallback.clone(),
+            input_expr.clone(),
+            &mut || self.exhaustive_error_callee(),
+        );
+        let mut cases = Vec::new();
+
+        for (value, group) in group_arms_by_path(arms, path)? {
+            let (group_arms, group_fallback) = strip_group_arms(group, path, fallback.clone())?;
+            let mut cons = if group_arms.is_empty() {
+                vec![fallback_stmt(
+                    target.clone(),
+                    group_fallback,
+                    input_expr.clone(),
+                    &mut || self.exhaustive_error_callee(),
+                )]
+            } else {
+                self.compile_assign_body(target.clone(), input_expr.clone(), group_arms, group_fallback)?
+            };
+            cons.push(break_stmt());
+
+            cases.push(SwitchCase {
+                span: DUMMY_SP,
+                test: Some(Box::new(value)),
+                cons,
+            });
+        }
+
+        cases.push(SwitchCase {
+            span: DUMMY_SP,
+            test: None,
+            cons: vec![default_fallback.clone(), break_stmt()],
+        });
+
+        Some(vec![
+            Stmt::If(IfStmt {
+                span: DUMMY_SP,
+                test: Box::new(unary(
+                    UnaryOp::Bang,
+                    paren_expr(object_path_base_test(input_expr.clone(), path)?),
+                )),
+                cons: Box::new(default_fallback),
+                alt: Some(Box::new(Stmt::Switch(SwitchStmt {
+                    span: DUMMY_SP,
+                    discriminant: Box::new(switch_expr),
+                    cases,
+                }))),
+            }),
+        ])
+    }
+
+    fn rewrite_block_stmts(&mut self, stmts: Vec<Stmt>) -> Vec<Stmt> {
+        let mut rewritten = Vec::new();
+
+        for stmt in stmts {
+            match stmt {
+                Stmt::Decl(Decl::Var(var)) if var.decls.len() == 1 => {
+                    let decl = &var.decls[0];
+                    let Pat::Ident(ident) = &decl.name else {
+                        rewritten.push(Stmt::Decl(Decl::Var(var)));
+                        continue;
+                    };
+                    let Some(init) = &decl.init else {
+                        rewritten.push(Stmt::Decl(Decl::Var(var)));
+                        continue;
+                    };
+                    let Some(chain) = self.parse_match_chain(init) else {
+                        rewritten.push(Stmt::Decl(Decl::Var(var)));
+                        continue;
+                    };
+                    let Some(mut assign_stmts) =
+                        self.compile_assign_match_stmts(ident_expr(&ident.id), chain)
+                    else {
+                        rewritten.push(Stmt::Decl(Decl::Var(var)));
+                        continue;
+                    };
+
+                    rewritten.push(var_without_init(
+                        var.kind,
+                        ident.id.clone(),
+                    ));
+                    rewritten.append(&mut assign_stmts);
+                }
+                other => rewritten.push(other),
+            }
+        }
+
+        rewritten
     }
 
     fn compile_ternary_chain(&mut self, chain: MatchChain) -> Option<Expr> {
@@ -1458,56 +1615,6 @@ fn can_inline_input(expr: &Expr) -> bool {
     matches!(expr, Expr::Ident(_) | Expr::Lit(_))
 }
 
-fn is_object_switch_chain(chain: &MatchChain) -> bool {
-    common_object_switch_key(chain).is_some()
-}
-
-fn common_object_switch_key(chain: &MatchChain) -> Option<PropName> {
-    if chain.arms.iter().any(|arm| arm.guard.is_some()) {
-        return None;
-    }
-
-    let mut keys = chain
-        .arms
-        .iter()
-        .flat_map(|arm| arm.patterns.iter())
-        .map(|pattern| object_switch_pattern(pattern).map(|(key, _)| key.clone()));
-
-    let first = keys.next()??;
-    keys.try_fold(first.clone(), |current, key| {
-        let key = key?;
-        prop_name_eq(&current, &key).then_some(current)
-    })
-}
-
-fn object_switch_pattern(pattern: &Expr) -> Option<(&PropName, &Expr)> {
-    let Expr::Object(object) = pattern else {
-        return None;
-    };
-
-    if object.props.len() != 1 {
-        return None;
-    }
-
-    let PropOrSpread::Prop(prop) = &object.props[0] else {
-        return None;
-    };
-    let Prop::KeyValue(key_value) = &**prop else {
-        return None;
-    };
-    is_switch_literal(&key_value.value).then_some((&key_value.key, &key_value.value))
-}
-
-fn object_switch_base_test(input: Expr, key: &PropName) -> Option<Expr> {
-    Some(and(
-        and(
-            strict_ne(input.clone(), null_lit()),
-            typeof_eq(input.clone(), "object"),
-        ),
-        prop_in_object(key, input)?,
-    ))
-}
-
 fn prop_name_eq(left: &PropName, right: &PropName) -> bool {
     match (left, right) {
         (PropName::Ident(left), PropName::Ident(right)) => left.sym == right.sym,
@@ -1591,6 +1698,212 @@ fn prop_access(value: Expr, key: &PropName) -> Option<Expr> {
     }
 }
 
+fn prop_access_path(value: Expr, path: &[PropName]) -> Option<Expr> {
+    let mut current = value;
+    for segment in path {
+        current = prop_access(current, segment)?;
+    }
+    Some(current)
+}
+
+fn object_path_base_test(input: Expr, path: &[PropName]) -> Option<Expr> {
+    let mut test = bool_lit(true);
+    let mut current = input;
+
+    for segment in path {
+        test = and(
+            test,
+            and(
+                and(strict_ne(current.clone(), null_lit()), typeof_eq(current.clone(), "object")),
+                prop_in_object(segment, current.clone())?,
+            ),
+        );
+        current = prop_access(current, segment)?;
+    }
+
+    Some(test)
+}
+
+fn common_switch_path(arms: &[MatchArm]) -> Option<Vec<PropName>> {
+    if arms.is_empty() || arms.iter().any(|arm| arm.guard.is_some() || arm.patterns.len() != 1) {
+        return None;
+    }
+
+    let mut paths = Vec::new();
+    collect_literal_paths(&arms[0].patterns[0], Vec::new(), &mut paths);
+    paths.sort_by_key(|path| path.len());
+
+    paths.into_iter().find(|path| {
+        let mut values = arms.iter().filter_map(|arm| literal_at_path(&arm.patterns[0], path));
+        let Some(first) = values.next() else {
+            return false;
+        };
+        values.any(|value| !switch_literals_eq(first, value))
+            && arms
+                .iter()
+                .all(|arm| literal_at_path(&arm.patterns[0], path).is_some())
+    })
+}
+
+fn collect_literal_paths(pattern: &Expr, prefix: Vec<PropName>, paths: &mut Vec<Vec<PropName>>) {
+    let Expr::Object(object) = pattern else {
+        return;
+    };
+
+    for prop in &object.props {
+        let PropOrSpread::Prop(prop) = prop else {
+            continue;
+        };
+        let Prop::KeyValue(key_value) = &**prop else {
+            continue;
+        };
+
+        let mut next = prefix.clone();
+        next.push(key_value.key.clone());
+
+        if is_switch_literal(&key_value.value) {
+            paths.push(next);
+            continue;
+        }
+
+        collect_literal_paths(&key_value.value, next, paths);
+    }
+}
+
+fn literal_at_path<'a>(pattern: &'a Expr, path: &[PropName]) -> Option<&'a Expr> {
+    let mut current = pattern;
+
+    for (index, segment) in path.iter().enumerate() {
+        let Expr::Object(object) = current else {
+            return None;
+        };
+        let key_value = object.props.iter().find_map(|prop| {
+            let PropOrSpread::Prop(prop) = prop else {
+                return None;
+            };
+            let Prop::KeyValue(key_value) = &**prop else {
+                return None;
+            };
+            prop_name_eq(&key_value.key, segment).then_some(key_value)
+        })?;
+
+        if index + 1 == path.len() {
+            return is_switch_literal(&key_value.value).then_some(&*key_value.value);
+        }
+
+        current = &key_value.value;
+    }
+
+    None
+}
+
+fn strip_group_arms(
+    arms: Vec<MatchArm>,
+    path: &[PropName],
+    inherited_fallback: Fallback,
+) -> Option<(Vec<MatchArm>, Fallback)> {
+    let mut stripped = Vec::new();
+    let mut fallback = inherited_fallback;
+
+    for arm in arms {
+        let pattern = arm.patterns.into_iter().next()?;
+        match strip_literal_path(&pattern, path)? {
+            Some(pattern) => stripped.push(MatchArm {
+                patterns: vec![Box::new(pattern)],
+                guard: arm.guard,
+                handler: arm.handler,
+            }),
+            None => {
+                fallback = Fallback::Otherwise(arm.handler);
+                break;
+            }
+        }
+    }
+
+    Some((stripped, fallback))
+}
+
+fn strip_literal_path(pattern: &Expr, path: &[PropName]) -> Option<Option<Expr>> {
+    let Expr::Object(object) = pattern else {
+        return None;
+    };
+
+    let mut props = Vec::new();
+
+    for prop in &object.props {
+        let PropOrSpread::Prop(prop) = prop else {
+            props.push(prop.clone());
+            continue;
+        };
+        let Prop::KeyValue(key_value) = &**prop else {
+            props.push(PropOrSpread::Prop(prop.clone()));
+            continue;
+        };
+
+        if !prop_name_eq(&key_value.key, &path[0]) {
+            props.push(PropOrSpread::Prop(prop.clone()));
+            continue;
+        }
+
+        if path.len() == 1 {
+            continue;
+        }
+
+        if let Some(stripped) = strip_literal_path(&key_value.value, &path[1..])? {
+            props.push(PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                key: key_value.key.clone(),
+                value: Box::new(stripped),
+            }))));
+        }
+    }
+
+    (!props.is_empty()).then_some(Some(Expr::Object(ObjectLit {
+        span: object.span,
+        props,
+    }))).or(Some(None))
+}
+
+fn group_arms_by_path(arms: Vec<MatchArm>, path: &[PropName]) -> Option<Vec<(Expr, Vec<MatchArm>)>> {
+    let mut groups: Vec<(Expr, Vec<MatchArm>)> = Vec::new();
+
+    for arm in arms {
+        let value = literal_at_path(&arm.patterns[0], path)?.clone();
+        if let Some((_, grouped_arms)) = groups
+            .iter_mut()
+            .find(|(group_value, _)| switch_literals_eq(group_value, &value))
+        {
+            grouped_arms.push(arm);
+        } else {
+            groups.push((value, vec![arm]));
+        }
+    }
+
+    Some(groups)
+}
+
+fn switch_literals_eq(left: &Expr, right: &Expr) -> bool {
+    match (left, right) {
+        (Expr::Lit(Lit::Str(left)), Expr::Lit(Lit::Str(right))) => left.value == right.value,
+        (Expr::Lit(Lit::Num(left)), Expr::Lit(Lit::Num(right))) => left.value == right.value,
+        (Expr::Lit(Lit::Bool(left)), Expr::Lit(Lit::Bool(right))) => left.value == right.value,
+        (Expr::Lit(Lit::BigInt(left)), Expr::Lit(Lit::BigInt(right))) => left.value == right.value,
+        (Expr::Lit(Lit::Null(_)), Expr::Lit(Lit::Null(_))) => true,
+        (
+            Expr::Unary(UnaryExpr {
+                op: UnaryOp::Minus,
+                arg: left,
+                ..
+            }),
+            Expr::Unary(UnaryExpr {
+                op: UnaryOp::Minus,
+                arg: right,
+                ..
+            }),
+        ) => switch_literals_eq(left, right),
+        _ => false,
+    }
+}
+
 fn const_stmt(ident: Ident, init: Expr) -> Stmt {
     Stmt::Decl(Decl::Var(Box::new(VarDecl {
         span: DUMMY_SP,
@@ -1641,6 +1954,56 @@ fn return_stmt(expr: Expr) -> Stmt {
         span: DUMMY_SP,
         arg: Some(Box::new(expr)),
     })
+}
+
+fn assign_stmt(target: Expr, expr: Expr) -> Stmt {
+    Stmt::Expr(ExprStmt {
+        span: DUMMY_SP,
+        expr: Box::new(Expr::Assign(AssignExpr {
+            span: DUMMY_SP,
+            op: AssignOp::Assign,
+            left: AssignTarget::try_from(Box::new(target)).expect("assign target"),
+            right: Box::new(expr),
+        })),
+    })
+}
+
+fn fallback_stmt(
+    target: Expr,
+    fallback: Fallback,
+    input_expr: Expr,
+    exhaustive_error_callee: &mut impl FnMut() -> Expr,
+) -> Stmt {
+    match fallback {
+        Fallback::Otherwise(handler) => assign_stmt(target, handler_result(handler, input_expr)),
+        Fallback::Exhaustive => throw_exhaustive_stmt(exhaustive_error_callee(), input_expr),
+    }
+}
+
+fn break_stmt() -> Stmt {
+    Stmt::Break(BreakStmt {
+        span: DUMMY_SP,
+        label: None,
+    })
+}
+
+fn var_without_init(kind: VarDeclKind, ident: Ident) -> Stmt {
+    Stmt::Decl(Decl::Var(Box::new(VarDecl {
+        span: DUMMY_SP,
+        ctxt: Default::default(),
+        kind: if kind == VarDeclKind::Var {
+            VarDeclKind::Var
+        } else {
+            VarDeclKind::Let
+        },
+        declare: false,
+        decls: vec![VarDeclarator {
+            span: DUMMY_SP,
+            name: Pat::Ident(ident.into()),
+            init: None,
+            definite: false,
+        }],
+    })))
 }
 
 fn handler_result(handler: Box<Expr>, input_expr: Expr) -> Expr {
@@ -1957,6 +2320,13 @@ fn unary(op: UnaryOp, arg: Expr) -> Expr {
     })
 }
 
+fn paren_expr(expr: Expr) -> Expr {
+    Expr::Paren(ParenExpr {
+        span: DUMMY_SP,
+        expr: Box::new(expr),
+    })
+}
+
 fn bool_lit(value: bool) -> Expr {
     Expr::Lit(Lit::Bool(Bool {
         span: DUMMY_SP,
@@ -2204,11 +2574,8 @@ export const run = (result: { type: "error" } | { type: "ok"; data: { type: "img
         );
 
         assert!(output.contains("=>{"), "{output}");
-        assert!(output.contains("if ("), "{output}");
-        assert!(
-            output.contains("throw new NonExhaustiveError(result)"),
-            "{output}"
-        );
+        assert!(output.contains("throw new NonExhaustiveError"), "{output}");
+        assert!(!output.contains("match(result).with"), "{output}");
         assert!(!output.contains("=>()=>"), "{output}");
     }
 

@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -38,6 +38,11 @@ export const hasSwcWasmBinding = () => existsSync(swcWasmPackagePath)
 
 const loadSwcWasm = () => require(swcWasmPackagePath) as SwcWasmBinding
 
+const cacheRootForPlugin = () => {
+  const { mtimeMs, size } = statSync(pluginPath)
+  return resolve(webRoot, ".swc-cache", `${size}-${Math.trunc(mtimeMs)}`)
+}
+
 export const transformWithSwcWasm = async (
   { code, moduleType, plugin }: TransformOptions,
 ) => {
@@ -56,7 +61,10 @@ export const transformWithSwcWasm = async (
       jsc: {
         parser: { syntax: "typescript", tsx: false },
         target: "es2022",
-        experimental: { plugins },
+        experimental: {
+          cacheRoot: plugin ? cacheRootForPlugin() : undefined,
+          plugins,
+        },
       },
       module: { type: moduleType },
     },
