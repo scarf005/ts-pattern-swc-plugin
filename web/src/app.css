@@ -40,6 +40,13 @@ h1 {
   min-height: 0;
 }
 
+.pane-stack {
+  display: grid;
+  grid-template-rows: 1fr 1fr;
+  gap: 1rem;
+  min-height: 0;
+}
+
 .pane {
   display: grid;
   grid-template-rows: auto 1fr;
@@ -143,9 +150,14 @@ button {
 
   .toolbar,
   .controls,
-  .panes {
+  .panes,
+  .pane-stack {
     display: grid;
     grid-template-columns: 1fr;
+  }
+
+  .pane-stack {
+    grid-template-rows: auto;
   }
 
   .monaco-host {

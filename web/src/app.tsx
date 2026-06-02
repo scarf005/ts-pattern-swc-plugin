@@ -163,6 +163,7 @@ const configureTypeScript = () => {
 configureTypeScript()
 
 const source = signal(DEFAULT_SOURCE)
+const compiledTsPattern = signal("")
 const compiled = signal("")
 const status = signal("Compiling")
 const iterations = signal("100000")
@@ -229,16 +230,25 @@ const compileSource = async (code: string) => {
   const version = ++compileVersion
   status.value = "Compiling"
   try {
-    const output = await transformSource({
-      code,
-      plugin: true,
-      moduleType: "es6",
-    })
+    const [baselineOutput, pluginOutput] = await Promise.all([
+      transformSource({
+        code,
+        plugin: false,
+        moduleType: "es6",
+      }),
+      transformSource({
+        code,
+        plugin: true,
+        moduleType: "es6",
+      }),
+    ])
     if (version !== compileVersion) return
-    compiled.value = output
+    compiledTsPattern.value = baselineOutput
+    compiled.value = pluginOutput
     status.value = ""
   } catch (error) {
     if (version !== compileVersion) return
+    compiledTsPattern.value = ""
     compiled.value = ""
     status.value = error instanceof Error ? error.message : String(error)
   }
@@ -558,16 +568,25 @@ export const App = () => (
       </div>
     </section>
     <section class="panes">
+      <section class="pane-stack">
+        <label class="pane">
+          <span>TypeScript</span>
+          <TypeScriptEditor
+            value={source.value}
+            theme={theme.value}
+            onChange={onEditorChange}
+          />
+        </label>
+        <label class="pane">
+          <span>Compiled ts-pattern JS</span>
+          <CodeViewer
+            value={status.value || compiledTsPattern.value}
+            theme={theme.value}
+          />
+        </label>
+      </section>
       <label class="pane">
-        <span>TypeScript</span>
-        <TypeScriptEditor
-          value={source.value}
-          theme={theme.value}
-          onChange={onEditorChange}
-        />
-      </label>
-      <label class="pane">
-        <span>Compiled JS</span>
+        <span>Compiled SWC plugin JS</span>
         <CodeViewer
           value={status.value || compiled.value}
           theme={theme.value}
