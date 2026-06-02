@@ -8,7 +8,7 @@ import { renderWithTsPatternSwc } from './runners/ts-pattern-swc'
 import type { BenchmarkResult, Renderer } from './runners/types'
 import tsPatternSourceCode from './runners/ts-pattern-as-is.tsx?raw'
 import plainSwitchSourceCode from './runners/plain.tsx?raw'
-import { compiledTsPatternSwcCode } from 'virtual:compiled-benchmark-snippets'
+import { compiledTsPatternSwcCode } from './compiled-snippets'
 import './App.css'
 
 type Runner = {
