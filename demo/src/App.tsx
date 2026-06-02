@@ -4,11 +4,11 @@ import { CodeBox } from './CodeBox'
 import { JsonTextarea } from './JsonTextarea'
 import { renderWithPlainSwitch } from './runners/plain'
 import { renderWithTsPatternAsIs } from './runners/ts-pattern-as-is'
-import { renderWithTsPatternSwc } from './runners/ts-pattern-swc'
+import { renderWithTsPatternSwc } from './runners/ts-pattern-swc-compiled.js'
 import type { BenchmarkResult, Renderer } from './runners/types'
 import tsPatternSourceCode from './runners/ts-pattern-as-is.tsx?raw'
 import plainSwitchSourceCode from './runners/plain.tsx?raw'
-import { compiledTsPatternSwcCode } from './compiled-snippets'
+import compiledTsPatternSwcCode from './runners/ts-pattern-swc-compiled.js?raw'
 import './App.css'
 
 type Runner = {

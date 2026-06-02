@@ -9,7 +9,16 @@ test('compares ts-pattern, SWC plugin, and plain JS columns after textarea edits
 
   const appModule = await page.request.get('/src/App.tsx')
   await expect(appModule).toBeOK()
-  await expect(await appModule.text()).toContain('export default App')
+  const appCode = await appModule.text()
+  await expect(appCode).toContain('export default App')
+  await expect(appCode).toContain('ts-pattern-swc-compiled.js')
+
+  const swcRunnerModule = await page.request.get('/src/runners/ts-pattern-swc-compiled.js')
+  await expect(swcRunnerModule).toBeOK()
+  const swcRunnerCode = await swcRunnerModule.text()
+  await expect(swcRunnerCode).toContain('const _tsPatternData = result.data')
+  await expect(swcRunnerCode).toContain('switch (_tsPatternData.type)')
+  await expect(swcRunnerCode).not.toContain('match(result).with')
 
   await page.goto('/', { waitUntil: 'networkidle' })
 
