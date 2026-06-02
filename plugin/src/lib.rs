@@ -38,6 +38,7 @@ struct MatchChain {
 #[derive(Clone)]
 struct MatchArm {
     patterns: Vec<Box<Expr>>,
+    handler_patterns: Vec<Box<Expr>>,
     guard: Option<Box<Expr>>,
     handler: Box<Expr>,
 }
@@ -404,27 +405,64 @@ impl TsPatternTransformer {
         let input_expr = ident_expr(&input_ident);
         let mut stmts = vec![const_stmt(input_ident, *chain.input)];
 
-        stmts.extend(self.compile_return_body(input_expr, chain.arms, chain.fallback)?);
+        stmts.extend(self.compile_return_body(
+            input_expr.clone(),
+            input_expr,
+            chain.arms,
+            chain.fallback,
+            false,
+        )?);
         Some(stmts)
     }
 
     fn compile_return_body(
         &mut self,
-        input_expr: Expr,
+        match_input_expr: Expr,
+        handler_input_expr: Expr,
         arms: Vec<MatchArm>,
         fallback: Fallback,
+        known_match_object: bool,
     ) -> Option<Vec<Stmt>> {
+        if known_match_object {
+            if let Some((prefix, prefixed_arms)) = common_object_prefix(&arms) {
+                let cached = private_ident_for_prop("_tsPattern", &prefix);
+                let cached_expr = ident_expr(&cached);
+                let mut stmts = vec![const_stmt(cached, prop_access(match_input_expr.clone(), &prefix)?)];
+                stmts.extend(self.compile_return_body(
+                    cached_expr,
+                    handler_input_expr,
+                    prefixed_arms,
+                    fallback,
+                    false,
+                )?);
+                return Some(stmts);
+            }
+        }
+
         if let Some(path) = common_switch_path(&arms) {
-            return self.compile_return_path_switch(input_expr, arms, fallback, &path);
+            return self.compile_return_path_switch(
+                match_input_expr,
+                handler_input_expr,
+                arms,
+                fallback,
+                &path,
+                known_match_object,
+            );
         }
 
         let mut stmts = Vec::new();
 
         for arm in arms {
-            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
+            let handler_input = arm_handler_input(self, handler_input_expr.clone(), &arm)?;
             stmts.push(Stmt::If(IfStmt {
                 span: DUMMY_SP,
-                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
+                test: Box::new(arm_test(
+                    self,
+                    match_input_expr.clone(),
+                    handler_input_expr.clone(),
+                    &arm,
+                    known_match_object,
+                )?),
                 cons: Box::new(return_stmt(handler_result(arm.handler, handler_input))),
                 alt: None,
             }));
@@ -432,23 +470,29 @@ impl TsPatternTransformer {
 
         let exhaustive_error_callee =
             matches!(fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
-        stmts.extend(fallback_stmts(fallback, input_expr, exhaustive_error_callee));
+        stmts.extend(fallback_stmts(
+            fallback,
+            handler_input_expr,
+            exhaustive_error_callee,
+        ));
         Some(stmts)
     }
 
     fn compile_return_path_switch(
         &mut self,
-        input_expr: Expr,
+        match_input_expr: Expr,
+        handler_input_expr: Expr,
         arms: Vec<MatchArm>,
         fallback: Fallback,
         path: &[PropName],
+        known_match_object: bool,
     ) -> Option<Vec<Stmt>> {
-        let switch_expr = prop_access_path(input_expr.clone(), path)?;
+        let switch_expr = prop_access_path(match_input_expr.clone(), path)?;
         let exhaustive_error_callee =
             matches!(fallback, Fallback::Exhaustive).then(|| self.exhaustive_error_callee());
         let default_fallback = fallback_stmts(
             fallback.clone(),
-            input_expr.clone(),
+            handler_input_expr.clone(),
             exhaustive_error_callee.clone(),
         );
         let mut cases = Vec::new();
@@ -458,12 +502,18 @@ impl TsPatternTransformer {
             let cons = if group_arms.is_empty() {
                 fallback_stmts(
                     group_fallback.clone(),
-                    input_expr.clone(),
+                    handler_input_expr.clone(),
                     matches!(group_fallback, Fallback::Exhaustive)
                         .then(|| self.exhaustive_error_callee()),
                 )
             } else {
-                self.compile_return_body(input_expr.clone(), group_arms, group_fallback)?
+                self.compile_return_body(
+                    match_input_expr.clone(),
+                    handler_input_expr.clone(),
+                    group_arms,
+                    group_fallback,
+                    true,
+                )?
             };
 
             cases.push(SwitchCase {
@@ -484,7 +534,7 @@ impl TsPatternTransformer {
                 span: DUMMY_SP,
                 test: Box::new(unary(
                     UnaryOp::Bang,
-                    paren_expr(object_path_base_test(input_expr.clone(), path)?),
+                    paren_expr(object_path_base_test(match_input_expr.clone(), path, known_match_object)?),
                 )),
                 cons: Box::new(Stmt::Block(BlockStmt {
                     span: DUMMY_SP,
@@ -516,33 +566,73 @@ impl TsPatternTransformer {
             )
         };
 
-        stmts.extend(self.compile_assign_body(target, input_expr, chain.arms, chain.fallback)?);
+        stmts.extend(self.compile_assign_body(
+            target,
+            input_expr.clone(),
+            input_expr,
+            chain.arms,
+            chain.fallback,
+            false,
+        )?);
         Some(stmts)
     }
 
     fn compile_assign_body(
         &mut self,
         target: Expr,
-        input_expr: Expr,
+        match_input_expr: Expr,
+        handler_input_expr: Expr,
         arms: Vec<MatchArm>,
         fallback: Fallback,
+        known_match_object: bool,
     ) -> Option<Vec<Stmt>> {
+        if known_match_object {
+            if let Some((prefix, prefixed_arms)) = common_object_prefix(&arms) {
+                let cached = private_ident_for_prop("_tsPattern", &prefix);
+                let cached_expr = ident_expr(&cached);
+                let mut stmts = vec![const_stmt(cached, prop_access(match_input_expr.clone(), &prefix)?)];
+                stmts.extend(self.compile_assign_body(
+                    target,
+                    cached_expr,
+                    handler_input_expr,
+                    prefixed_arms,
+                    fallback,
+                    false,
+                )?);
+                return Some(stmts);
+            }
+        }
+
         if let Some(path) = common_switch_path(&arms) {
-            return self.compile_assign_path_switch(target, input_expr, arms, fallback, &path);
+            return self.compile_assign_path_switch(
+                target,
+                match_input_expr,
+                handler_input_expr,
+                arms,
+                fallback,
+                &path,
+                known_match_object,
+            );
         }
 
         let mut current = fallback_stmt(
             target.clone(),
             fallback,
-            input_expr.clone(),
+            handler_input_expr.clone(),
             &mut || self.exhaustive_error_callee(),
         );
 
         for arm in arms.into_iter().rev() {
-            let handler_input = arm_handler_input(self, input_expr.clone(), &arm)?;
+            let handler_input = arm_handler_input(self, handler_input_expr.clone(), &arm)?;
             current = Stmt::If(IfStmt {
                 span: DUMMY_SP,
-                test: Box::new(arm_test(self, input_expr.clone(), &arm)?),
+                test: Box::new(arm_test(
+                    self,
+                    match_input_expr.clone(),
+                    handler_input_expr.clone(),
+                    &arm,
+                    known_match_object,
+                )?),
                 cons: Box::new(assign_stmt(
                     target.clone(),
                     handler_result(arm.handler, handler_input),
@@ -557,16 +647,18 @@ impl TsPatternTransformer {
     fn compile_assign_path_switch(
         &mut self,
         target: Expr,
-        input_expr: Expr,
+        match_input_expr: Expr,
+        handler_input_expr: Expr,
         arms: Vec<MatchArm>,
         fallback: Fallback,
         path: &[PropName],
+        known_match_object: bool,
     ) -> Option<Vec<Stmt>> {
-        let switch_expr = prop_access_path(input_expr.clone(), path)?;
+        let switch_expr = prop_access_path(match_input_expr.clone(), path)?;
         let default_fallback = fallback_stmt(
             target.clone(),
             fallback.clone(),
-            input_expr.clone(),
+            handler_input_expr.clone(),
             &mut || self.exhaustive_error_callee(),
         );
         let mut cases = Vec::new();
@@ -577,11 +669,18 @@ impl TsPatternTransformer {
                 vec![fallback_stmt(
                     target.clone(),
                     group_fallback,
-                    input_expr.clone(),
+                    handler_input_expr.clone(),
                     &mut || self.exhaustive_error_callee(),
                 )]
             } else {
-                self.compile_assign_body(target.clone(), input_expr.clone(), group_arms, group_fallback)?
+                self.compile_assign_body(
+                    target.clone(),
+                    match_input_expr.clone(),
+                    handler_input_expr.clone(),
+                    group_arms,
+                    group_fallback,
+                    true,
+                )?
             };
             cons.push(break_stmt());
 
@@ -603,7 +702,7 @@ impl TsPatternTransformer {
                 span: DUMMY_SP,
                 test: Box::new(unary(
                     UnaryOp::Bang,
-                    paren_expr(object_path_base_test(input_expr.clone(), path)?),
+                    paren_expr(object_path_base_test(match_input_expr.clone(), path, known_match_object)?),
                 )),
                 cons: Box::new(default_fallback),
                 alt: Some(Box::new(Stmt::Switch(SwitchStmt {
@@ -668,7 +767,7 @@ impl TsPatternTransformer {
         for arm in chain.arms.into_iter().rev() {
             let handler_input = arm_handler_input(self, input.clone(), &arm)?;
             expression = cond_expr(
-                arm_test(self, input.clone(), &arm)?,
+                arm_test(self, input.clone(), input.clone(), &arm, false)?,
                 handler_result(arm.handler, handler_input),
                 expression,
             );
@@ -690,6 +789,15 @@ impl TsPatternTransformer {
     fn pattern_test(&self, value: Expr, pattern: &Expr) -> Option<Expr> {
         let mut selections = Vec::new();
         self.pattern_test_with_selections(value, pattern, &mut selections)
+    }
+
+    fn pattern_test_with_known_object(&self, value: Expr, pattern: &Expr) -> Option<Expr> {
+        let mut selections = Vec::new();
+        let pattern = self.resolve_pattern_expr(pattern);
+        match pattern {
+            Expr::Object(object) => self.object_test_with_base(value, object, &mut selections, bool_lit(true)),
+            _ => self.pattern_test_with_selections(value, pattern, &mut selections),
+        }
     }
 
     fn pattern_test_with_selections(
@@ -1340,11 +1448,21 @@ impl TsPatternTransformer {
         object: &ObjectLit,
         selections: &mut Vec<SelectionBinding>,
     ) -> Option<Expr> {
-        let base = and(
-            strict_ne(value.clone(), null_lit()),
-            typeof_eq(value.clone(), "object"),
-        );
+        self.object_test_with_base(
+            value.clone(),
+            object,
+            selections,
+            and(strict_ne(value.clone(), null_lit()), typeof_eq(value, "object")),
+        )
+    }
 
+    fn object_test_with_base(
+        &self,
+        value: Expr,
+        object: &ObjectLit,
+        selections: &mut Vec<SelectionBinding>,
+        base: Expr,
+    ) -> Option<Expr> {
         object.props.iter().try_fold(base, |acc, prop| {
             let PropOrSpread::Prop(prop) = prop else {
                 return None;
@@ -1480,6 +1598,7 @@ fn parse_with_arm(call: &CallExpr) -> Option<MatchArm> {
     };
 
     Some(MatchArm {
+        handler_patterns: args.clone(),
         patterns: args,
         guard,
         handler,
@@ -1491,20 +1610,34 @@ fn parse_when_arm(call: &CallExpr) -> Option<MatchArm> {
         return None;
     }
 
+    let pattern = Box::new(Expr::Invalid(Invalid { span: DUMMY_SP }));
     Some(MatchArm {
-        patterns: vec![Box::new(Expr::Invalid(Invalid { span: DUMMY_SP }))],
+        patterns: vec![pattern.clone()],
+        handler_patterns: vec![pattern],
         guard: Some(call.args[0].expr.clone()),
         handler: call.args[1].expr.clone(),
     })
 }
 
-fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> Option<Expr> {
+fn arm_test(
+    transformer: &TsPatternTransformer,
+    match_input: Expr,
+    guard_input: Expr,
+    arm: &MatchArm,
+    known_match_object: bool,
+) -> Option<Expr> {
     let pattern_test = if arm.patterns.len() == 1 && matches!(*arm.patterns[0], Expr::Invalid(_)) {
         bool_lit(true)
     } else {
         arm.patterns
             .iter()
-            .map(|pattern| transformer.pattern_test(input.clone(), pattern))
+            .map(|pattern| {
+                if known_match_object {
+                    transformer.pattern_test_with_known_object(match_input.clone(), pattern)
+                } else {
+                    transformer.pattern_test(match_input.clone(), pattern)
+                }
+            })
             .try_fold(None, |acc, test| {
                 let test = test?;
                 Some(Some(match acc {
@@ -1515,7 +1648,7 @@ fn arm_test(transformer: &TsPatternTransformer, input: Expr, arm: &MatchArm) -> 
     };
 
     match &arm.guard {
-        Some(guard) => Some(and(pattern_test, guard_result(guard, input))),
+        Some(guard) => Some(and(pattern_test, guard_result(guard, guard_input))),
         None => Some(pattern_test),
     }
 }
@@ -1527,7 +1660,7 @@ fn arm_handler_input(
 ) -> Option<Expr> {
     let mut selections = Vec::new();
 
-    for pattern in &arm.patterns {
+    for pattern in &arm.handler_patterns {
         transformer.pattern_test_with_selections(input_expr.clone(), pattern, &mut selections)?;
     }
 
@@ -1535,7 +1668,7 @@ fn arm_handler_input(
         return Some(input_expr);
     }
 
-    if arm.patterns.len() != 1 {
+    if arm.handler_patterns.len() != 1 {
         return None;
     }
 
@@ -1706,22 +1839,81 @@ fn prop_access_path(value: Expr, path: &[PropName]) -> Option<Expr> {
     Some(current)
 }
 
-fn object_path_base_test(input: Expr, path: &[PropName]) -> Option<Expr> {
+fn object_path_base_test(input: Expr, path: &[PropName], known_input_object: bool) -> Option<Expr> {
     let mut test = bool_lit(true);
     let mut current = input;
 
     for segment in path {
-        test = and(
-            test,
-            and(
-                and(strict_ne(current.clone(), null_lit()), typeof_eq(current.clone(), "object")),
-                prop_in_object(segment, current.clone())?,
-            ),
-        );
+        let object_test = if known_input_object && matches!(current, Expr::Ident(_)) {
+            bool_lit(true)
+        } else {
+            and(strict_ne(current.clone(), null_lit()), typeof_eq(current.clone(), "object"))
+        };
+        test = and(test, and(object_test, prop_in_object(segment, current.clone())?));
         current = prop_access(current, segment)?;
     }
 
     Some(test)
+}
+
+fn common_object_prefix(arms: &[MatchArm]) -> Option<(PropName, Vec<MatchArm>)> {
+    if arms.is_empty() || arms.iter().any(|arm| arm.patterns.len() != 1) {
+        return None;
+    }
+
+    let (prefix, _) = single_object_prop_with_object_value(&arms[0].patterns[0])?;
+    let mut stripped = Vec::new();
+
+    for arm in arms {
+        let (key, value) = single_object_prop_with_object_value(&arm.patterns[0])?;
+        if !prop_name_eq(&prefix, &key) {
+            return None;
+        }
+
+        stripped.push(MatchArm {
+            patterns: vec![value.clone()],
+            handler_patterns: arm.handler_patterns.clone(),
+            guard: arm.guard.clone(),
+            handler: arm.handler.clone(),
+        });
+    }
+
+    Some((prefix, stripped))
+}
+
+fn single_object_prop_with_object_value(pattern: &Expr) -> Option<(PropName, &Box<Expr>)> {
+    let Expr::Object(object) = pattern else {
+        return None;
+    };
+    if object.props.len() != 1 {
+        return None;
+    }
+    let PropOrSpread::Prop(prop) = &object.props[0] else {
+        return None;
+    };
+    let Prop::KeyValue(key_value) = &**prop else {
+        return None;
+    };
+    matches!(&*key_value.value, Expr::Object(_)).then_some((key_value.key.clone(), &key_value.value))
+}
+
+fn private_ident_for_prop(prefix: &str, prop: &PropName) -> Ident {
+    let name = match prop {
+        PropName::Ident(ident) => ident.sym.to_string(),
+        PropName::Str(string) => string.value.to_string_lossy().to_string(),
+        _ => "value".to_string(),
+    };
+    let sanitized: String = name
+        .chars()
+        .filter(|char| char.is_ascii_alphanumeric() || *char == '_')
+        .collect();
+    let mut chars = sanitized.chars();
+    let suffix = match chars.next() {
+        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+        None => "Value".to_string(),
+    };
+
+    Ident::new(format!("{prefix}{suffix}").into(), DUMMY_SP, Default::default())
 }
 
 fn common_switch_path(arms: &[MatchArm]) -> Option<Vec<PropName>> {
@@ -1810,6 +2002,7 @@ fn strip_group_arms(
         match strip_literal_path(&pattern, path)? {
             Some(pattern) => stripped.push(MatchArm {
                 patterns: vec![Box::new(pattern)],
+                handler_patterns: arm.handler_patterns,
                 guard: arm.guard,
                 handler: arm.handler,
             }),
@@ -2587,7 +2780,8 @@ export const run = (result: { type: "error" } | { type: "ok"; data: { type: "img
         );
 
         assert!(output.contains("switch(_tsPatternInput.type)"), "{output}");
-        assert!(output.contains("switch(_tsPatternInput.data.type)"), "{output}");
+        assert!(output.contains("const _tsPatternData = _tsPatternInput.data"), "{output}");
+        assert!(output.contains("switch(_tsPatternData.type)"), "{output}");
         assert!(output.contains("return _tsPatternInput.data.src"), "{output}");
         assert!(!output.contains("match(result).with"), "{output}");
     }
@@ -2604,7 +2798,8 @@ export const render = (result: { type: "error" } | { type: "ok"; data: { type: "
 
         assert!(output.contains("let html;"), "{output}");
         assert!(output.contains("switch(result.type)"), "{output}");
-        assert!(output.contains("switch(result.data.type)"), "{output}");
+        assert!(output.contains("const _tsPatternData = result.data"), "{output}");
+        assert!(output.contains("switch(_tsPatternData.type)"), "{output}");
         assert!(!output.contains("match(result).with"), "{output}");
     }
 
