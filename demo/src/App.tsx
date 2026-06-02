@@ -43,7 +43,7 @@ const runners: Runner[] = [
   },
   {
     id: 'plain-js',
-    title: 'plain JS with switch/if',
+    title: 'plain JS with nested switch',
     render: renderWithPlainSwitch,
   },
 ]

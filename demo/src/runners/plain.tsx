@@ -8,13 +8,18 @@ export const renderWithPlainSwitch = (result: Result): RenderedResult => {
     case 'error':
       html = <p>Oups! An error occured</p>
       break
-    case 'ok':
-      if (result.data.type === 'text') {
-        html = <p>{result.data.content}</p>
-        break
+    case 'ok': {
+      const data = result.data
+      switch (data.type) {
+        case 'text':
+          html = <p>{data.content}</p>
+          break
+        case 'img':
+          html = <img src={data.src} />
+          break
       }
-      html = <img src={result.data.src} />
       break
+    }
   }
 
   return { html, text: textForHtml(html) }
