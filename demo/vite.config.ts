@@ -1,35 +1,13 @@
 import { readFile } from 'node:fs/promises'
-import { createRequire } from 'node:module'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { normalizePath, type Plugin, defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 import { transformTsPattern } from '@scarf/ts-pattern-swc-plugin/transform'
 
-const require = createRequire(import.meta.url)
 const demoRoot = dirname(fileURLToPath(import.meta.url))
-const pluginRoot = resolve(demoRoot, '../plugin')
-const swc = require(resolve(pluginRoot, 'node_modules/@swc/core')) as {
-  transform: (code: string, options: Record<string, unknown>) => Promise<{ code: string }>
-}
 const compiledSnippetId = 'virtual:compiled-benchmark-snippets'
 const resolvedCompiledSnippetId = '\0virtual:compiled-benchmark-snippets'
-
-const compileWithoutPlugin = async (code: string, filename: string) =>
-  (await swc.transform(code, {
-    filename,
-    sourceMaps: false,
-    module: { type: 'es6' },
-    jsc: {
-      parser: { syntax: 'typescript', tsx: filename.endsWith('.tsx') },
-      target: 'es2022',
-      transform: {
-        react: {
-          runtime: 'automatic',
-        },
-      },
-    },
-  })).code
 
 const tsPatternSwcPlugin = (): Plugin => {
   let swcRunnerTransformed = false
@@ -44,12 +22,25 @@ const tsPatternSwcPlugin = (): Plugin => {
     async load(id) {
       if (id !== resolvedCompiledSnippetId) return null
 
-      const compiledTsPatternCode = await compileWithoutPlugin(
-        await readFile(resolve(demoRoot, 'src/runners/ts-pattern-as-is.tsx'), 'utf8'),
-        'src/runners/ts-pattern-as-is.tsx',
-      )
+      const compiledTsPatternSwcCode = (await transformTsPattern(
+        await readFile(resolve(demoRoot, 'src/runners/ts-pattern-swc.tsx'), 'utf8'),
+        {
+          filename: 'src/runners/ts-pattern-swc.tsx',
+          sourceMaps: false,
+          swcOptions: {
+            module: { type: 'es6' },
+            jsc: {
+              transform: {
+                react: {
+                  runtime: 'automatic',
+                },
+              },
+            },
+          },
+        },
+      )).code
 
-      return `export const compiledTsPatternCode = ${JSON.stringify(compiledTsPatternCode)}`
+      return `export const compiledTsPatternSwcCode = ${JSON.stringify(compiledTsPatternSwcCode)}`
     },
     async transform(code, id) {
       const filename = id.split('?')[0]
