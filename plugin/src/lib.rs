@@ -2213,6 +2213,35 @@ export const run = (result: { type: "error" } | { type: "ok"; data: { type: "img
     }
 
     #[test]
+    fn emits_nested_switch_for_shared_object_discriminants() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+export const run = (result: { type: "error" } | { type: "ok"; data: { type: "img"; src: string } } | { type: "ok"; data: { type: "text"; content: string } }) => match(result).with({ type: "error" }, () => "error").with({ type: "ok", data: { type: "text" } }, ({ data }) => data.content).with({ type: "ok", data: { type: "img", src: P.select() } }, (src) => src).exhaustive();"#,
+        );
+
+        assert!(output.contains("switch(_tsPatternInput.type)"), "{output}");
+        assert!(output.contains("switch(_tsPatternInput.data.type)"), "{output}");
+        assert!(output.contains("return _tsPatternInput.data.src"), "{output}");
+        assert!(!output.contains("match(result).with"), "{output}");
+    }
+
+    #[test]
+    fn rewrites_exhaustive_match_variable_initializer_in_block_body() {
+        let output = transform(
+            r#"import { match, P } from "ts-pattern";
+export const render = (result: { type: "error" } | { type: "ok"; data: { type: "img"; src: string } } | { type: "ok"; data: { type: "text"; content: string } }) => {
+  const html = match(result).with({ type: "error" }, () => "error").with({ type: "ok", data: { type: "text" } }, ({ data }) => data.content).with({ type: "ok", data: { type: "img", src: P.select() } }, (src) => src).exhaustive();
+  return html;
+};"#,
+        );
+
+        assert!(output.contains("let html;"), "{output}");
+        assert!(output.contains("switch(result.type)"), "{output}");
+        assert!(output.contains("switch(result.data.type)"), "{output}");
+        assert!(!output.contains("match(result).with"), "{output}");
+    }
+
+    #[test]
     fn emits_ternary_for_object_pattern() {
         let output = transform(
             r#"import { match, P } from "ts-pattern";
