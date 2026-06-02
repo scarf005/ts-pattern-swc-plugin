@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { benchmarkRenderer, defaultBenchmarkOperations, defaultInput, parseOperations, parseRecords } from './benchmark'
+import { benchmarkRenderers, defaultBenchmarkOperations, defaultInput, parseOperations, parseRecords } from './benchmark'
 import { CodeBox } from './CodeBox'
 import { JsonTextarea } from './JsonTextarea'
 import { renderWithPlainSwitch } from './runners/plain'
@@ -79,18 +79,18 @@ function App() {
       const records = parseRecords(source)
       const parseMs = performance.now() - parseStartedAt
 
-      const results = await Promise.all(
-        runners.map(async (runner) => ({
-          ...runner,
-          result: await benchmarkRenderer({
-            operations,
-            records,
-            render: runner.render,
-          }),
-        })),
-      )
+      const results = await benchmarkRenderers({
+        operations,
+        records,
+        renders: runners.map(({ render }) => render),
+      })
 
-      setState({ status: 'done', parseMs, records: records.length, runners: results })
+      setState({
+        status: 'done',
+        parseMs,
+        records: records.length,
+        runners: runners.map((runner, index) => ({ ...runner, result: results[index] })),
+      })
     } catch (error) {
       setState({
         status: 'error',
@@ -148,7 +148,7 @@ function App() {
             {state.status === 'idle' && 'Ready.'}
             {state.status === 'running' && 'Running benchmark asynchronously…'}
             {state.status === 'done' &&
-              `Parsed ${state.records} records in ${formatMs(state.parseMs)}. Each column ran ${state.runners[0]?.result?.operations.toLocaleString()} operations.`}
+              `Parsed ${state.records} records in ${formatMs(state.parseMs)}. Median of 7 samples, ${state.runners[0]?.result?.operations.toLocaleString()} operations per sample.`}
             {state.status === 'error' && `Parse error: ${state.message}`}
           </p>
 

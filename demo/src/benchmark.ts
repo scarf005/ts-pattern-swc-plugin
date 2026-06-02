@@ -111,6 +111,34 @@ const nextFrame = async () => {
 
 const checksumFor = (row: RenderedResult) => row.text.length
 
+const benchmarkOrders = (sampleCount: number, runnerCount: number) =>
+  Array.from(
+    { length: sampleCount },
+    (_, sample) => Array.from({ length: runnerCount }, (_, offset) => (sample + offset) % runnerCount),
+  )
+
+const median = (results: { elapsedMs: number; checksum: number }[]) =>
+  [...results].sort((left, right) => left.elapsedMs - right.elapsedMs)[Math.floor(results.length / 2)]
+
+const runSample = ({
+  operations,
+  records,
+  render,
+}: {
+  operations: number
+  records: Result[]
+  render: Renderer
+}) => {
+  let checksum = 0
+  const startedAt = performance.now()
+
+  for (let operation = 0; operation < operations; operation += 1) {
+    checksum += checksumFor(render(records[operation % records.length]))
+  }
+
+  return { elapsedMs: performance.now() - startedAt, checksum }
+}
+
 export const benchmarkRenderer = async ({
   operations,
   records,
@@ -120,23 +148,45 @@ export const benchmarkRenderer = async ({
   records: Result[]
   render: Renderer
 }): Promise<BenchmarkResult> => {
+  const [result] = await benchmarkRenderers({ operations, records, renders: [render] })
+  return result
+}
+
+export const benchmarkRenderers = async ({
+  operations,
+  records,
+  renders,
+}: {
+  operations: number
+  records: Result[]
+  renders: Renderer[]
+}): Promise<BenchmarkResult[]> => {
   await nextFrame()
 
-  const output = records.map(render)
-  let checksum = 0
-  const startedAt = performance.now()
+  const output = renders.map((render) => records.map(render))
+  const warmupOperations = Math.min(10_000, Math.max(records.length * 10, Math.floor(operations / 10)))
+  const samples = renders.map(() => new Array<{ elapsedMs: number; checksum: number }>())
 
-  for (let operation = 0; operation < operations; operation += 1) {
-    checksum += checksumFor(render(records[operation % records.length]))
+  for (const order of benchmarkOrders(2, renders.length)) {
+    for (const index of order) {
+      runSample({ operations: warmupOperations, records, render: renders[index] })
+    }
   }
 
-  const elapsedMs = performance.now() - startedAt
-
-  return {
-    elapsedMs,
-    operations,
-    operationsPerSecond: elapsedMs === 0 ? 0 : (operations / elapsedMs) * 1000,
-    checksum,
-    output,
+  for (const order of benchmarkOrders(7, renders.length)) {
+    for (const index of order) {
+      samples[index].push(runSample({ operations, records, render: renders[index] }))
+    }
   }
+
+  return renders.map((_, index) => {
+    const result = median(samples[index])
+    return {
+      elapsedMs: result.elapsedMs,
+      operations,
+      operationsPerSecond: result.elapsedMs === 0 ? 0 : (operations / result.elapsedMs) * 1000,
+      checksum: result.checksum,
+      output: output[index],
+    }
+  })
 }
