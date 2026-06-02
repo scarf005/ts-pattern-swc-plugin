@@ -7,6 +7,7 @@ import { renderWithTsPatternAsIs } from './runners/ts-pattern-as-is'
 import { renderWithTsPatternSwc } from './runners/ts-pattern-swc'
 import type { BenchmarkResult, Renderer } from './runners/types'
 import { plainSwitchCode, tsPatternCode } from './snippets'
+import { compiledTsPatternCode } from 'virtual:compiled-benchmark-snippets'
 import './App.css'
 
 type Runner = {
@@ -138,7 +139,8 @@ function App() {
           </label>
 
           <section className="code-grid" aria-label="matching code">
-            <CodeBox code={tsPatternCode} label="ts-pattern code" />
+            <CodeBox code={tsPatternCode} label="source ts-pattern code" />
+            <CodeBox code={compiledTsPatternCode} label="compiled ts-pattern code" />
             <CodeBox code={plainSwitchCode} label="plain switch if code" />
           </section>
         </section>
