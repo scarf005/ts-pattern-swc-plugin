@@ -8,7 +8,8 @@
     "build": "tsc -b && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:browser": "playwright test"
+    "test:browser": "playwright test",
+    "test:build-output": "node tests/build-output.test.mjs"
   },
   "dependencies": {
     "@scarf/ts-pattern-swc-plugin": "file:../plugin",

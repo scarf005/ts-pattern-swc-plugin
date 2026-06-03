@@ -3,12 +3,10 @@ import { benchmarkRenderers, defaultBenchmarkOperations, defaultInput, parseOper
 import { CodeBox } from './CodeBox'
 import { JsonTextarea } from './JsonTextarea'
 import { renderWithPlainSwitch } from './runners/plain'
-import { renderWithTsPatternAsIs } from './runners/ts-pattern-as-is'
-import { renderWithTsPatternSwc } from './runners/ts-pattern-swc-compiled.js'
+import { renderWithTsPatternSwc } from './runners/ts-pattern-swc'
 import type { BenchmarkResult, Renderer } from './runners/types'
-import tsPatternSourceCode from './runners/ts-pattern-as-is.tsx?raw'
+import tsPatternSourceCode from './runners/ts-pattern-swc.tsx?raw'
 import plainSwitchSourceCode from './runners/plain.tsx?raw'
-import compiledTsPatternSwcCode from './runners/ts-pattern-swc-compiled.js?raw'
 import './App.css'
 
 type Runner = {
@@ -32,11 +30,6 @@ const playgroundUrl = 'https://ts-pattern-swc-plugin.pages.dev/'
 
 const runners: Runner[] = [
   {
-    id: 'ts-pattern-as-is',
-    title: 'ts-pattern AS-IS',
-    render: renderWithTsPatternAsIs,
-  },
-  {
     id: 'ts-pattern-swc',
     title: 'ts-pattern with swc-plugin',
     render: renderWithTsPatternSwc,
@@ -55,13 +48,13 @@ const formatMs = (value: number) => `${value.toFixed(2)} ms`
 const formatRate = (value: number) => `${Math.round(value).toLocaleString()} ops/s`
 
 const throughputComparison = (runner: RunnerState, baseline?: BenchmarkResult) => {
-  if (!runner.result || !baseline || runner.id === 'ts-pattern-as-is') return undefined
+  if (!runner.result || !baseline || runner.id === 'plain-js') return undefined
 
   const ratio = runner.result.operationsPerSecond / baseline.operationsPerSecond
   const percent = Math.abs((ratio - 1) * 100)
   return {
     className: ratio >= 1 ? 'faster' : 'slower',
-    text: `(${percent.toFixed(1)}% ${ratio >= 1 ? 'faster' : 'slower'} than ts-pattern)`,
+    text: `(${percent.toFixed(1)}% ${ratio >= 1 ? 'faster' : 'slower'} than plain switch)`,
   }
 }
 
@@ -102,7 +95,7 @@ function App() {
     }
   }
 
-  const baseline = state.runners.find((runner) => runner.id === 'ts-pattern-as-is')?.result
+  const baseline = state.runners.find((runner) => runner.id === 'plain-js')?.result
 
   return (
     <main>
@@ -140,8 +133,7 @@ function App() {
           </label>
 
           <section className="code-grid" aria-label="matching code">
-            <CodeBox code={tsPatternSourceCode} label="source ts-pattern module code" />
-            <CodeBox code={compiledTsPatternSwcCode} label="compiled ts-pattern with swc-plugin module code" />
+            <CodeBox code={tsPatternSourceCode} label="source ts-pattern module compiled by swc-plugin" />
             <CodeBox code={plainSwitchSourceCode} label="source plain switch module code" />
           </section>
         </section>
