@@ -1,6 +1,6 @@
 [package]
 name = "ts-pattern-swc-plugin"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 license = "AGPL-3.0-only"
 description = "SWC plugin that compiles ts-pattern match expressions into switch/if-else chains"
