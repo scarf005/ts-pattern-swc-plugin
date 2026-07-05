@@ -99,8 +99,7 @@ jobs:
         run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
       - name: Publish to npm
         working-directory: plugin
-        env: { NODE_AUTH_TOKEN: "${{ secrets.NPM_TOKEN }}" }
-        run: npm publish --provenance --access public
+        run: npm publish --access public
       - name: Publish to JSR
         working-directory: plugin
         run: deno publish
