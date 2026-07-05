@@ -32,6 +32,9 @@ jobs:
           cache: true
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-wasip1 }
+      - name: Install plugin npm dependencies
+        working-directory: plugin
+        run: npm ci
       - name: Rust unit tests
         run: cargo test --manifest-path plugin/Cargo.toml
       - name: Build SWC plugin wasm
