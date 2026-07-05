@@ -32,9 +32,6 @@ jobs:
           cache: true
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-wasip1 }
-      - name: Install plugin npm dependencies
-        working-directory: plugin
-        run: npm ci
       - name: Rust unit tests
         run: cargo test --manifest-path plugin/Cargo.toml
       - name: Build SWC plugin wasm
@@ -56,9 +53,6 @@ jobs:
       - name: Vendored ts-pattern tests
         working-directory: vendor/ts-pattern
         run: npm test
-      - name: npm package dry run
-        working-directory: plugin
-        run: npm pack --dry-run
       - name: JSR publish dry run
         working-directory: plugin
         run: deno publish --dry-run
@@ -74,32 +68,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with: { submodules: recursive }
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          registry-url: https://registry.npmjs.org
-          cache: npm
-          cache-dependency-path: plugin/package-lock.json
       - uses: denoland/setup-deno@v2
         with:
           deno-version: v2.x
           cache: true
       - uses: dtolnay/rust-toolchain@stable
         with: { targets: wasm32-wasip1 }
-      - name: Verify release tag matches package versions
+      - name: Verify release tag matches JSR package version
         run: |
-          PKG_VERSION="$(node -p "require('./plugin/package.json').version")"
-          JSR_VERSION="$(node -p "require('./plugin/deno.json').version")"
-          test "$PKG_VERSION" = "$JSR_VERSION"
-          test "refs/tags/v$PKG_VERSION" = "$GITHUB_REF"
-      - name: Install npm dependencies
-        working-directory: plugin
-        run: npm ci
+          JSR_VERSION="$(deno eval "const config = JSON.parse(await Deno.readTextFile('./plugin/deno.json')); console.log(config.version)")"
+          test "refs/tags/v$JSR_VERSION" = "$GITHUB_REF"
       - name: Build SWC plugin wasm
         run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
-      - name: Publish to npm
-        working-directory: plugin
-        run: npm publish --access public
       - name: Publish to JSR
         working-directory: plugin
         run: deno publish
