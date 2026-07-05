@@ -14,6 +14,35 @@ const rewriteImports = (source: string) =>
     .replaceAll("from '../src/index';", 'from "ts-pattern";')
     .replaceAll('from "../src/index";', 'from "ts-pattern";');
 
+const noMatchRequiredFiles = new Set([
+  "instance-of.test.ts",
+  "otherwise.test.ts",
+  "strings.test.ts",
+  "unions.test.ts",
+]);
+
+const escapeRegExp = (value: string) =>
+  value.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");
+
+const tsPatternRequireAliases = (source: string) =>
+  [...source.matchAll(
+    /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*require\(["'](?:npm:)?ts-pattern["']\);/g,
+  )].map(([, alias]) => alias);
+
+const residualTsPatternMatchCall = (source: string) => {
+  const directMatch = /require\(["'](?:npm:)?ts-pattern["']\)\.match\s*\(/.exec(
+    source,
+  );
+  if (directMatch) return directMatch[0];
+
+  for (const alias of tsPatternRequireAliases(source)) {
+    const aliasMatch = new RegExp(
+      `(?:\\(0,\\s*)?${escapeRegExp(alias)}\\.match\\)?\\s*\\(`,
+    ).exec(source);
+    if (aliasMatch) return aliasMatch[0];
+  }
+};
+
 const testFiles = async () => {
   const files: string[] = [];
   for await (const entry of Deno.readDir(testsRoot)) {
@@ -83,7 +112,17 @@ await copyDirectory(
 
 try {
   const files = await testFiles();
-  const failures: string[] = [];
+  const filesRequiringNoMatch = files.filter((file) =>
+    noMatchRequiredFiles.has(file)
+  );
+  const missingNoMatchFiles = [...noMatchRequiredFiles].filter((file) =>
+    !files.includes(file)
+  );
+  const failures: string[] = missingNoMatchFiles.length > 0
+    ? [
+      `No-match requirement files not found: ${missingNoMatchFiles.join(", ")}`,
+    ]
+    : [];
 
   for (const file of files) {
     const url = new URL(file, testsRoot);
@@ -94,6 +133,14 @@ try {
         moduleType: "commonjs",
         plugin: true,
       });
+      const residualMatch = noMatchRequiredFiles.has(file)
+        ? residualTsPatternMatchCall(output.code)
+        : undefined;
+      if (residualMatch) {
+        failures.push(
+          `${file}: transformed output still calls ts-pattern match: ${residualMatch}`,
+        );
+      }
       await Deno.writeTextFile(
         new URL(file.replace(/\.test\.ts$/, ".test.cjs"), generatedRoot),
         output.code,
@@ -113,6 +160,9 @@ try {
 
   await writeGeneratedConfig();
   console.log(`Transformed ${files.length} vendored ts-pattern test files`);
+  console.log(
+    `Verified ${filesRequiringNoMatch.length} vendored ts-pattern test files contain no runtime match calls`,
+  );
   await runGeneratedTests();
 } finally {
   await Deno.remove(generatedRoot, { recursive: true }).catch((error) => {
