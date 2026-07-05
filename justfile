@@ -4,7 +4,7 @@ web:
 test:
     cd plugin && npm ci
     cargo test --manifest-path plugin/Cargo.toml
-    cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+    cd plugin && npm run build
     cd web && deno task check
     cd web && deno task test
     just check-examples

@@ -11,7 +11,7 @@ const env = () => {
 }
 
 const pluginPath = env()
-  ?? fileURLToPath(new URL("./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm", import.meta.url))
+  ?? fileURLToPath(new URL("./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin", import.meta.url))
 
 register(new URL("./loader.mjs", import.meta.url), {
   parentURL: import.meta.url,

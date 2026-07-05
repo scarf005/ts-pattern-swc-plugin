@@ -22,7 +22,14 @@ Arrow-bodied matches are emitted as `switch` statements or `if` blocks when a st
 ## Install
 
 ```sh
-npm install @scarf/ts-pattern-swc-plugin
+npx jsr add @scarf/ts-pattern-swc-plugin
+```
+
+With npm directly:
+
+```sh
+echo '@jsr:registry=https://npm.jsr.io' >> .npmrc
+npm install @scarf/ts-pattern-swc-plugin@npm:@jsr/scarf__ts-pattern-swc-plugin
 ```
 
 ## Configure SWC

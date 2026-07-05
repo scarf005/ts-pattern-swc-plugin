@@ -6,7 +6,7 @@ import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 
 const transform = namedTransform ?? swc.transform
-const wasmUrl = new URL("./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm", import.meta.url)
+const wasmUrl = new URL("./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin", import.meta.url)
 
 export const defaultPluginPath = () => fileURLToPath(wasmUrl)
 

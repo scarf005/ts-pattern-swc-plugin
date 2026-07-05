@@ -1,13 +1,13 @@
 {
   "name": "@scarf/ts-pattern-swc-plugin",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "SWC plugin that compiles supported ts-pattern match expressions into plain JavaScript control flow",
   "license": "AGPL-3.0-only",
   "type": "commonjs",
-  "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+  "main": "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin",
   "exports": {
-    ".": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
-    "./wasm": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    ".": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin",
+    "./wasm": "./target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin",
     "./loader": {
       "types": "./loader.d.ts",
       "default": "./loader.mjs"
@@ -30,7 +30,7 @@
     "ts-pattern-swc": "./run.mjs"
   },
   "files": [
-    "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm",
+    "target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin",
     "loader.mjs",
     "register.mjs",
     "run.mjs",
@@ -42,7 +42,7 @@
     "README.md"
   ],
   "scripts": {
-    "build": "cargo build --release --target wasm32-wasip1",
+    "build": "cargo build --release --target wasm32-wasip1 && cp target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin",
     "test": "cargo test",
     "prepack": "npm run build"
   },

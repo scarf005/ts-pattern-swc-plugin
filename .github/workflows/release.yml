@@ -38,7 +38,8 @@ jobs:
       - name: Rust unit tests
         run: cargo test --manifest-path plugin/Cargo.toml
       - name: Build SWC plugin wasm
-        run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+        working-directory: plugin
+        run: npm run build
       - name: Web check
         working-directory: web
         run: deno task check
@@ -82,7 +83,9 @@ jobs:
           JSR_VERSION="$(deno eval "const config = JSON.parse(await Deno.readTextFile('./plugin/deno.json')); console.log(config.version)")"
           test "refs/tags/v$JSR_VERSION" = "$GITHUB_REF"
       - name: Build SWC plugin wasm
-        run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+        run: |
+          cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+          cp plugin/target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm plugin/target/wasm32-wasip1/release/ts_pattern_swc_plugin.wasm.bin
       - name: Publish to JSR
         working-directory: plugin
         run: deno publish

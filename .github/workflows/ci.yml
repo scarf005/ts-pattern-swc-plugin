@@ -35,7 +35,8 @@ jobs:
 
       - run: cargo test --manifest-path plugin/Cargo.toml
 
-      - run: cargo build --manifest-path plugin/Cargo.toml --release --target wasm32-wasip1
+      - run: npm run build
+        working-directory: plugin
 
       - run: npm pack --dry-run --ignore-scripts
         working-directory: plugin
