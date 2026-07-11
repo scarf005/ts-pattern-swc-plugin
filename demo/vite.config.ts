@@ -1,6 +1,6 @@
 import { normalizePath, type Plugin, defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
-import { transformTsPattern } from '@scarf/ts-pattern-swc-plugin/transform'
+import { transformTsPattern } from '@scarf005/ts-pattern-swc-plugin/transform'
 
 const tsPatternSwcPlugin = (): Plugin => {
   let swcRunnerTransformed = false

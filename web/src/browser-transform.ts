@@ -8,7 +8,7 @@ type TransformOptions = {
   moduleType: ModuleType
 }
 
-const pluginName = "@scarf/ts-pattern-swc-plugin"
+const pluginName = "@scarf005/ts-pattern-swc-plugin"
 const pluginWasmUrl = `${import.meta.env.BASE_URL}ts_pattern_swc_plugin.wasm`
 
 let swcReady: Promise<void> | undefined
